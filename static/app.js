@@ -1515,6 +1515,9 @@ $("#brand").addEventListener("click", async e => {
 // Claude Code, with no tools, writes the answer with [[page]] citations.
 
 const AI = { turns: [], ctx: undefined };       // ctx undefined: follow the open note; null: none
+const AI_MODELS = [["auto", "自動（Jev 選）"], ["haiku", "Haiku：快、省"], ["sonnet", "Sonnet：一般"], ["opus", "Opus：最強、最耗額度"]];
+function aiModel() { try { return localStorage.getItem("notesapp.aiModel") || "auto"; } catch (e) { return "auto"; } }
+function setAiModel(m) { try { localStorage.setItem("notesapp.aiModel", m); } catch (e) {} }
 S.rtab = "note";
 
 function questionLike(raw) {
@@ -1556,8 +1559,8 @@ async function askAI(q) {
   const history = AI.turns.filter(t => t !== turn && t.status === "done").map(t => ({ q: t.q, a: t.text }));
   try {
     const a = await api("/api/ai/ask", { q, context: turn.ctx && !turn.ctx.private ? turn.ctx.path : null,
-      sources: turn.sources.map(x => x.path), history });
-    Object.assign(turn, { id: a.id, used: a.used, ctxUsed: a.context, model: a.model, status: "writing" });
+      sources: turn.sources.map(x => x.path), history, model: aiModel(), jev: !!jevUsable() });
+    Object.assign(turn, { id: a.id, used: a.used, ctxUsed: a.context, choice: a.choice, status: "writing" });
   } catch (e) { turn.status = "error"; turn.error = e.message; renderAI(); return; }
   renderAI();
   while (turn.status === "writing") {
@@ -1565,6 +1568,7 @@ async function askAI(q) {
     let p;
     try { p = await api("/api/ai/poll?id=" + turn.id); } catch (e) { turn.status = "error"; turn.error = e.message; break; }
     const changed = p.text !== turn.text || p.status !== "running";
+    if (p.model !== turn.model || p.why !== turn.why || p.retried !== turn.retried) Object.assign(turn, { model: p.model, effort: p.effort, why: p.why, retried: p.retried }), renderAI();
     turn.text = p.text; turn.seconds = p.seconds;
     if (p.status !== "running") { turn.status = p.status; turn.error = p.error; }
     if (changed) renderAI();
@@ -1577,14 +1581,16 @@ function turnHtml(t) {
   if (t.ctx) h += '<div class="ai-ctxline">背景：' + esc(t.ctx.title) + (t.ctx.private ? "（日記，不送出）" : "") + "</div>";
   if (t.status === "finding") return h + '<div class="ai-a muted"><span class="spin"></span> 找相關的頁…</div></div>';
   if (t.status === "asking") return h + '<div class="ai-a muted"><span class="spin"></span> 交給 Claude…</div></div>';
-  h += '<div class="ai-a">' + (t.text ? md(t.text) : "") + (t.status === "writing" ? '<span class="ai-caret"></span>' : "");
+  if (t.status === "writing" && !t.text) h += '<div class="ai-a muted"><span class="spin"></span> ' + (!t.model ? (t.choice === "auto" ? "Jev 選模型…" : "準備…") :
+    esc(cap(t.model)) + (t.retried ? " 重新回答（第 " + (t.retried + 1) + " 次）…" : " 想一下…")) + "</div>";
+  h += '<div class="ai-a">' + (t.text ? md(t.text) : "") + (t.status === "writing" && t.text ? '<span class="ai-caret"></span>' : "");
   if (t.status === "error") h += '<div class="banner">沒有回答：' + esc(t.error || "") +
     (/log ?in|login|auth|登入/i.test(t.error || "") ? "。在終端機打 <code>claude</code> 登入後再試。" : "") + "</div>";
   if (t.status === "stopped") h += '<div class="ai-meta">已停止。</div>';
   const used = t.used || [];
   if (t.status !== "writing" && (used.length || t.ctxUsed)) {
     h += '<details class="ai-used"><summary>讀了' + (t.ctxUsed ? "背景筆記和 " : " ") + used.length + " 頁" +
-      (t.mode === "jev" ? "（Jev 找的）" : "（關鍵字找的" + (t.searchError ? "，Jev 沒回應" : "") + "）") + (t.model ? " · " + esc(t.model) : "") + (t.seconds ? " · " + t.seconds + " 秒" : "") + "</summary>" +
+      (t.mode === "jev" ? "（Jev 找的）" : "（關鍵字找的" + (t.searchError ? "，Jev 沒回應" : "") + "）") + (t.model ? " · " + esc(cap(t.model)) + (t.choice === "auto" ? "（" + esc(t.why) + "）" : "") : "") + (t.seconds ? " · " + t.seconds + " 秒" : "") + "</summary>" +
       (t.ctxUsed ? '<a class="wl" data-path="' + esc(t.ctxUsed.path) + '">' + esc(t.ctxUsed.title) + "</a>（背景）" : "") +
       used.map(u => '<a class="wl" data-path="' + esc(u.path) + '">' + esc(u.title) + "</a>").join("") + "</details>";
   }
@@ -1593,6 +1599,9 @@ function turnHtml(t) {
     (t.ctx && !t.ctx.private && mine(t.ctx.path) ? '<button data-demo="ingest">整理「' + esc(t.ctx.title) + "」</button>" : "") + "</div>";
   return h + "</div></div>";
 }
+
+const cap = m => m ? m[0].toUpperCase() + m.slice(1) : "";
+document.addEventListener("change", e => { if (e.target.id === "ai-model") setAiModel(e.target.value); });
 
 function renderAI() {
   const el = $("#ai");
@@ -1611,7 +1620,8 @@ function renderAI() {
     '<div class="ai-conv" id="ai-conv">' + conv + "</div>" +
     '<div class="ai-composer"><div id="ai-ctx" class="ai-ctx"></div>' +
     '<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行）"></textarea>' +
-    '<div class="ai-send-row"><span id="ai-sends" class="muted"></span><button class="primary" id="ai-send">送出</button></div></div>';
+    '<div class="ai-send-row"><select id="ai-model" title="回答用的模型">' + AI_MODELS.map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
+    '</select><button class="primary" id="ai-send">送出</button></div><div id="ai-sends" class="muted"></div></div>';
   const inp = $("#ai-input"); inp.value = draft; if (focused) inp.focus();
   const c = $("#ai-conv"); if (atBottom) c.scrollTop = c.scrollHeight; else if (conv0) c.scrollTop = conv0.scrollTop;
   updateAICtx();

@@ -576,6 +576,10 @@ def triage_unit(rel):
     return wiki.unit_of(rel)
 
 
+def has_jev():
+    return bool(os.environ.get("TYPESAFE_API_KEY") or os.path.exists(jev.KEY_FILE))
+
+
 def api_tree(q):
     v = V.fresh()
     v.images = attachment_map()          # attachments added in Finder or Obsidian show up without a restart
@@ -602,7 +606,7 @@ def api_tree(q):
             "images": v.images, "journal": journal_dir(), "assets": os.path.relpath(ASSETS, VAULT),
             "attach_to": os.path.relpath(ATTACH_DIR, VAULT),
             "notes_root": wiki.RAW_REL, "read_only": READ_ONLY, "protected": PROTECTED, "vault_path": VAULT,
-            "jev": bool(os.environ.get("TYPESAFE_API_KEY") or os.path.exists(jev.KEY_FILE))}
+            "jev": has_jev()}
 
 
 def api_note(q):
@@ -1437,25 +1441,69 @@ def ai_prompt(body):
     return msg, used, ctx_used
 
 
-# Sometimes the model answers with stray markup instead of an answer (seen with Opus here: "<budget:…>",
-# "<reasoning_effort>…", "<thinking_mode>…"). Such an answer is dropped and asked once more.
+# A last check on the answer: stray markup instead of an answer (seen with Opus: "<budget:…>",
+# "<reasoning_effort>…", "<thinking_mode>…") means it is asked again.
 JUNK = re.compile(r"^\s*</?[a-z]+_[a-z_]+>|<(budget:|reasoning_effort>|thinking_mode>)")
 
 
+MODELS = ("haiku", "sonnet", "opus")
+EFFORTS = ("low", "medium", "high")
+
+# "Auto" asks Jev two questions about the question and the pages the app found (titles and summaries only),
+# the same idea as the model-auto-switch router, cut down to what matters for answering from notes.
+ROUTE_Q = {
+    "difficulty": {"type": "score", "instructions":
+        "How hard is it to answer `question` well from the notes in `pages` (titles and summaries of the pages "
+        "the app hands over; `open_note` is the note the user is reading, `earlier` the conversation so far)?",
+        "criteria": [
+            "Look-up: the answer is a fact, name, date, number or definition stated in one place.",
+            "Explain or summarize: restate or explain plainly what one or two pages say.",
+            "Connect: relate, compare or reconcile claims across several pages, trace causes, or find where "
+            "sources agree and disagree.",
+            "Deep: an original argument, a critique, or a long structured essay whose quality of thought is the point.",
+        ]},
+    "deliberation": {"type": "score", "instructions": "How much careful reasoning before answering does `question` need?",
+        "criteria": [
+            "None: the answer can be written at once.",
+            "Some: check a few details or choose how to organize the answer.",
+            "Step by step: it is only right after weighing evidence, comparing alternatives or checking an argument.",
+        ]},
+}
+ROUTE_WHY = ["查一個事實", "說明一兩頁的內容", "要連結、比較好幾頁", "要深入論證或寫長文"]
+
+
 def ai_model():
-    return str(load_settings().get("ai_model") or "sonnet")
+    m = str(load_settings().get("ai_model") or "auto")
+    return m if m in MODELS + ("auto",) else "auto"
+
+
+def route(job):
+    """(model, effort, why) for an "auto" question."""
+    if not job["jev"]:
+        return "sonnet", "medium", "Jev 關著，用預設的 Sonnet"
+    st = job["route_state"]
+    try:
+        a = jev.ask(json.dumps(st, ensure_ascii=False), ROUTE_Q)
+        d, t = jev.score(a, "difficulty"), jev.score(a, "deliberation")
+    except Exception:
+        return "sonnet", "medium", "Jev 沒回應，用預設的 Sonnet"
+    model = "haiku" if d == 0 else "opus" if d >= 3 or (d == 2 and t >= 2) else "sonnet"
+    return model, EFFORTS[min(t, 2)], "Jev 判斷：" + ROUTE_WHY[min(d, 3)]
 
 
 def run_once(job, msg, cwd):
+    """One Claude Code run. Returns "retry" when Opus started answering without thinking first: in that case
+    (about half the time here) its reasoning or bits of Claude Code's own instructions leak into the answer."""
     import subprocess
     cmd = [job["bin"], "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
            "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence",
-           "--model", job["model"], "--system-prompt", AI_SYSTEM]
+           "--model", job["model"], "--effort", job["effort"], "--system-prompt", AI_SYSTEM]
     proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, encoding="utf-8")
     job["proc"] = proc
     proc.stdin.write(msg)
     proc.stdin.close()
+    thought = False
     for line in proc.stdout:
         try:
             d = json.loads(line)
@@ -1464,6 +1512,14 @@ def run_once(job, msg, cwd):
         if d.get("type") == "stream_event":
             ev = d.get("event") or {}
             delta = ev.get("delta") or {}
+            if ev.get("type") == "content_block_start":
+                kind = (ev.get("content_block") or {}).get("type")
+                if kind == "thinking":
+                    thought = True
+                elif kind == "text" and job["model"] == "opus" and not thought:
+                    proc.kill()
+                    proc.wait()
+                    return "retry"
             if ev.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
                 job["text"] += delta.get("text", "")
         elif d.get("type") == "result":
@@ -1475,6 +1531,7 @@ def run_once(job, msg, cwd):
     if proc.returncode and not job["error"] and not job["stopped"]:
         err = (proc.stderr.read() or "").strip()
         job["error"] = err[-400:] or "Claude Code 結束時出錯（代碼 %s）" % proc.returncode
+    return "junk" if not job["stopped"] and not job["error"] and JUNK.search(job["text"][:300]) else "ok"
 
 
 def run_ai(job, msg):
@@ -1483,14 +1540,25 @@ def run_ai(job, msg):
     if os.environ.get("NOTES_AI_DEBUG"):
         open(os.path.join(cwd, "last_prompt.txt"), "w", encoding="utf-8").write(msg)
     try:
-        for attempt in range(2):
+        if job["choice"] == "auto":
+            job["model"], job["effort"], job["why"] = route(job)
+        else:
+            # Opus thinks first far more often at high effort (and leaks its reasoning when it doesn't)
+            job["model"], job["effort"], job["why"] = job["choice"], "high" if job["choice"] == "opus" else "medium", "你選的"
+        tries = 0
+        while not job["stopped"]:
             job["text"], job["error"] = "", None
-            run_once(job, msg, cwd)
-            if job["stopped"] or job["error"] or not JUNK.search(job["text"][:300]):
+            r = run_once(job, msg, cwd)
+            if r == "ok" or job["stopped"] or job["error"]:
                 break
-            job["retried"] = True
-        if not job["stopped"] and not job["error"] and JUNK.search(job["text"][:300]):
-            job["error"], job["text"] = "Claude 兩次都沒有給出正常的回答，請再問一次。", ""
+            tries += 1
+            job["retried"] = tries
+            if tries >= 3 or (r == "junk" and tries >= 2):
+                if job["model"] == "sonnet":
+                    job["text"], job["error"] = "", "Claude 沒有給出正常的回答，請再問一次。"
+                    break
+                job["why"] += "；%s 連續 %d 次回答不正常，改用 Sonnet" % (job["model"].capitalize(), tries)
+                job["model"], tries = "sonnet", 0
     except Exception as e:                        # not installed, not logged in, killed…
         job["error"] = str(e)
     job["status"] = "stopped" if job["stopped"] else "error" if job["error"] else "done"
@@ -1506,12 +1574,18 @@ def api_ai_ask(body):
         return 400, {"error": "找不到 Claude Code（claude 指令）。先安裝並登入 Claude Code。"}
     msg, used, ctx_used = ai_prompt(body)
     jid = secrets.token_hex(6)
-    job = AI_JOBS[jid] = {"bin": exe, "model": ai_model(), "text": "", "status": "running", "error": None, "stopped": False,
-                          "started": time.time(), "proc": None}
+    choice = body.get("model") if body.get("model") in MODELS + ("auto",) else ai_model()
+    v = V.fresh()
+    pages = [{"title": u["title"], "summary": str(v.by_rel[u["path"]].fm.get("summary", ""))[:300]} for u in used]
+    state = {"question": str(body.get("q") or "")[:2000], "open_note": ctx_used["title"] if ctx_used else "",
+             "earlier": [str(h.get("q") or "")[:500] for h in (body.get("history") or [])][-2:], "pages": pages}
+    job = AI_JOBS[jid] = {"bin": exe, "choice": choice, "model": None, "effort": None, "why": "", "text": "",
+                          "status": "running", "error": None, "stopped": False, "started": time.time(), "proc": None,
+                          "jev": bool(body.get("jev")) and has_jev(), "route_state": state}
     for k in [k for k, j in AI_JOBS.items() if j["status"] != "running" and time.time() - j["started"] > 3600]:
         AI_JOBS.pop(k, None)
     threading.Thread(target=run_ai, args=(job, msg), daemon=True).start()
-    return 200, {"id": jid, "used": used, "context": ctx_used, "chars": len(msg), "model": job["model"]}
+    return 200, {"id": jid, "used": used, "context": ctx_used, "chars": len(msg), "choice": choice}
 
 
 def api_ai_poll(q):
@@ -1519,7 +1593,7 @@ def api_ai_poll(q):
     if not job:
         return 404, {"error": "沒有這個回答"}
     return 200, {"text": job["text"], "status": job["status"], "error": job["error"], "seconds": job.get("seconds"),
-                 "retried": bool(job.get("retried"))}
+                 "model": job["model"], "effort": job["effort"], "why": job["why"], "retried": job.get("retried", 0)}
 
 
 def api_ai_stop(body):

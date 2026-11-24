@@ -403,3 +403,5 @@ h1.renamable:hover { background: var(--panel); }
 .ai-a h1, .ai-a h2, .ai-a h3, .ai-a h4 { font-size: 14px; margin: 10px 0 4px; }
 .ai-a .banner { margin-top: 8px; }
 #ai-send { white-space: nowrap; flex-shrink: 0; }
+#ai-model { flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: 5px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+#ai-sends { font-size: 11px; margin-top: 6px; }
