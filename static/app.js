@@ -1508,10 +1508,11 @@ $("#brand").addEventListener("click", async e => {
   showMenu(r.left, r.bottom + 4, items);
 });
 
-// ============================================================ ask AI (test version: the AI isn't connected yet)
+// ============================================================ ask AI (Claude Code, answers only)
 // One box for everything: typing finds pages; Enter searches; ⌘↵ (or the "問 AI" row, first when the text reads
-// like a question) asks the AI. The conversation lives in the right column's AI tab, next to the note's
-// suggestions. Retrieval is real (Jev, or keywords with Jev off); the answer text is a placeholder.
+// like a question) asks. The conversation lives in the right column's AI tab, next to the note's suggestions.
+// The app finds the pages (Jev, or keywords with Jev off) and sends them with the open note (never the journal);
+// Claude Code, with no tools, writes the answer with [[page]] citations.
 
 const AI = { turns: [], ctx: undefined };       // ctx undefined: follow the open note; null: none
 S.rtab = "note";
@@ -1542,56 +1543,77 @@ async function askAI(q) {
   q = String(q || "").trim();
   if (!q) return;
   input.value = ""; quick.hidden = true; input.blur();
+  if ($("#ai-input")) $("#ai-input").value = "";
   showRight("ai");
-  const turn = { q, ctx: aiContext(), status: "finding", sources: [] };
+  const turn = { q, ctx: aiContext(), status: "finding", sources: [], text: "" };
   AI.turns.push(turn); renderAI();
   const jev = jevUsable();
   let r = jev ? JEV_CACHE.get(q) : null;
   try { if (!r || r.error) r = await api("/api/search?q=" + encodeURIComponent(q) + (jev ? "" : "&mode=bm25")); }
   catch (e) { r = { mode: "bm25", results: [], error: e.message }; }
-  turn.mode = r.mode; turn.error = r.error; turn.sources = (r.results || []).slice(0, 6); turn.status = "done";
+  turn.mode = r.mode; turn.searchError = r.error; turn.sources = (r.results || []).slice(0, 8);
+  turn.status = "asking"; renderAI();
+  const history = AI.turns.filter(t => t !== turn && t.status === "done").map(t => ({ q: t.q, a: t.text }));
+  try {
+    const a = await api("/api/ai/ask", { q, context: turn.ctx && !turn.ctx.private ? turn.ctx.path : null,
+      sources: turn.sources.map(x => x.path), history });
+    Object.assign(turn, { id: a.id, used: a.used, ctxUsed: a.context, model: a.model, status: "writing" });
+  } catch (e) { turn.status = "error"; turn.error = e.message; renderAI(); return; }
+  renderAI();
+  while (turn.status === "writing") {
+    await new Promise(res => setTimeout(res, 250));
+    let p;
+    try { p = await api("/api/ai/poll?id=" + turn.id); } catch (e) { turn.status = "error"; turn.error = e.message; break; }
+    const changed = p.text !== turn.text || p.status !== "running";
+    turn.text = p.text; turn.seconds = p.seconds;
+    if (p.status !== "running") { turn.status = p.status; turn.error = p.error; }
+    if (changed) renderAI();
+  }
   renderAI();
 }
 
-function demoAnswer(turn) {
-  const src = turn.sources;
-  let t = "";
-  if (turn.ctx) t += turn.ctx.private ? "背景筆記「" + turn.ctx.title + "」是日記，不會送出。\n\n"
-    : "會先讀背景筆記 [[" + turn.ctx.path.replace(/\.md$/, "") + "|" + turn.ctx.title + "]]。\n\n";
-  if (!src.length) return t + "知識庫裡找不到和這個問題相關的頁。接上 AI 之後，它會說明缺什麼資料，並建議可以補哪些來源。";
-  t += "和這個問題最相關的是 " + src.slice(0, 3).map(x => "[[" + x.title + "]]").join("、") + "。\n\n";
-  t += src.map(x => "- [[" + x.title + "]]：" + (x.summary || "")).join("\n");
-  return t;
+function turnHtml(t) {
+  let h = '<div class="ai-turn"><div class="ai-q">' + esc(t.q) + "</div>";
+  if (t.ctx) h += '<div class="ai-ctxline">背景：' + esc(t.ctx.title) + (t.ctx.private ? "（日記，不送出）" : "") + "</div>";
+  if (t.status === "finding") return h + '<div class="ai-a muted"><span class="spin"></span> 找相關的頁…</div></div>';
+  if (t.status === "asking") return h + '<div class="ai-a muted"><span class="spin"></span> 交給 Claude…</div></div>';
+  h += '<div class="ai-a">' + (t.text ? md(t.text) : "") + (t.status === "writing" ? '<span class="ai-caret"></span>' : "");
+  if (t.status === "error") h += '<div class="banner">沒有回答：' + esc(t.error || "") +
+    (/log ?in|login|auth|登入/i.test(t.error || "") ? "。在終端機打 <code>claude</code> 登入後再試。" : "") + "</div>";
+  if (t.status === "stopped") h += '<div class="ai-meta">已停止。</div>';
+  const used = t.used || [];
+  if (t.status !== "writing" && (used.length || t.ctxUsed)) {
+    h += '<details class="ai-used"><summary>讀了' + (t.ctxUsed ? "背景筆記和 " : " ") + used.length + " 頁" +
+      (t.mode === "jev" ? "（Jev 找的）" : "（關鍵字找的" + (t.searchError ? "，Jev 沒回應" : "") + "）") + (t.model ? " · " + esc(t.model) : "") + (t.seconds ? " · " + t.seconds + " 秒" : "") + "</summary>" +
+      (t.ctxUsed ? '<a class="wl" data-path="' + esc(t.ctxUsed.path) + '">' + esc(t.ctxUsed.title) + "</a>（背景）" : "") +
+      used.map(u => '<a class="wl" data-path="' + esc(u.path) + '">' + esc(u.title) + "</a>").join("") + "</details>";
+  }
+  if (t.status === "writing") h += '<div class="ai-acts"><button data-stop="' + esc(t.id) + '">停止</button></div>';
+  else if (t.status === "done") h += '<div class="ai-acts"><button data-demo="save">存成分析頁</button>' +
+    (t.ctx && !t.ctx.private && mine(t.ctx.path) ? '<button data-demo="ingest">整理「' + esc(t.ctx.title) + "」</button>" : "") + "</div>";
+  return h + "</div></div>";
 }
 
 function renderAI() {
   const el = $("#ai");
+  const old = $("#ai-input"), draft = old ? old.value : "", focused = old && document.activeElement === old;
+  const conv0 = $("#ai-conv"), atBottom = !conv0 || conv0.scrollHeight - conv0.scrollTop - conv0.clientHeight < 40;
   let conv = "";
   if (!AI.turns.length) {
     const ctx = aiContext();
-    const ex = (ctx && !ctx.private ? ["這篇的重點是什麼？", "這篇和我知識庫裡哪些概念有關？"] : []).concat(["我的筆記裡有哪些互相矛盾的說法？", "幫我比較兩個常出現的概念"]);
-    conv = '<div class="ai-intro"><h3>✦ 問 AI <span class="chip">測試版</span></h3><p>在上面的搜尋框打問題，按 ⌘↵；或在下面直接問。AI 讀你的知識庫和目前打開的筆記回答，回答裡的頁面都能點。</p>' +
-      '<p class="muted">測試版還沒接上 AI：找相關頁是真的（Jev 開時用 Jev，關時用關鍵字），回答的文字是示範。</p>' +
+    const ex = (ctx && !ctx.private ? ["這篇的重點是什麼？", "這篇和我知識庫裡哪些概念有關？"] : []).concat(["我的筆記裡有哪些互相矛盾的說法？", "保險和信任有什麼關係？"]);
+    conv = '<div class="ai-intro"><h3>✦ 問 AI</h3><p>在上面的搜尋框打問題按 ⌘↵，或在下面直接問。app 先找出相關的頁，連同目前打開的筆記交給 Claude，回答裡的頁面都能點。</p>' +
+      '<p class="muted">Claude 只回答，不能開檔案、也不會改任何東西。日記永遠不送出。</p>' +
       '<div class="ai-examples">' + ex.map(x => '<button data-example="' + esc(x) + '">' + esc(x) + "</button>").join("") + "</div></div>";
   }
-  for (const t of AI.turns) {
-    conv += '<div class="ai-turn"><div class="ai-q">' + esc(t.q) + "</div>";
-    if (t.ctx) conv += '<div class="ai-ctxline">背景：' + esc(t.ctx.title) + (t.ctx.private ? "（日記，不送出）" : "") + "</div>";
-    if (t.status === "finding") conv += '<div class="ai-a muted"><span class="spin"></span> 找相關的頁…</div>';
-    else {
-      conv += '<div class="ai-a"><div class="demo-tag">示範回答 · 還沒接 AI</div>' + md(demoAnswer(t)) +
-        '<div class="ai-meta">' + (t.mode === "jev" ? "相關頁由 Jev 找出" : "相關頁由關鍵字找出" + (t.error ? "（Jev 沒回應）" : "")) + " · 接上 AI 後，每句後面會標出處</div>" +
-        '<div class="ai-acts"><button data-demo="save">存成分析頁</button>' +
-        (t.ctx && !t.ctx.private && mine(t.ctx.path) ? '<button data-demo="ingest">整理「' + esc(t.ctx.title) + "」</button>" : "") + "</div></div>";
-    }
-    conv += "</div>";
-  }
+  conv += AI.turns.map(turnHtml).join("");
   el.innerHTML = '<div class="ai-head"><span>對話</span>' + (AI.turns.length ? '<button class="ghost" data-new>新對話</button>' : "") + "</div>" +
     '<div class="ai-conv" id="ai-conv">' + conv + "</div>" +
     '<div class="ai-composer"><div id="ai-ctx" class="ai-ctx"></div>' +
     '<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行）"></textarea>' +
     '<div class="ai-send-row"><span id="ai-sends" class="muted"></span><button class="primary" id="ai-send">送出</button></div></div>';
-  const c = $("#ai-conv"); c.scrollTop = c.scrollHeight;
+  const inp = $("#ai-input"); inp.value = draft; if (focused) inp.focus();
+  const c = $("#ai-conv"); if (atBottom) c.scrollTop = c.scrollHeight; else if (conv0) c.scrollTop = conv0.scrollTop;
   updateAICtx();
 }
 
@@ -1601,7 +1623,7 @@ function updateAICtx() {
   const ctx = aiContext();
   box.innerHTML = ctx ? '<span class="chip ctx">以「' + esc(ctx.title) + "」為背景" + (ctx.private ? "（日記，不送出）" : "") + ' <button data-ctx-off title="不要用這篇當背景">×</button></span>'
     : AI.ctx === null && tab() && tab().kind === "note" ? '<button class="link-btn" data-ctx-on>＋ 用目前的筆記當背景</button>' : '<span class="muted">沒有背景筆記</span>';
-  $("#ai-sends").textContent = "會送出：問題、相關頁的摘要" + (ctx && !ctx.private ? "、背景筆記" : "") + "。日記不送。";
+  $("#ai-sends").textContent = "會送給 Claude：問題、相關的頁" + (ctx && !ctx.private ? "、背景筆記" : "") + "、這段對話。日記不送。";
 }
 
 $("#ai").addEventListener("click", e => {
@@ -1612,8 +1634,9 @@ $("#ai").addEventListener("click", e => {
   const b = e.target.closest("button");
   if (!b) return;
   if (b.dataset.example) return askAI(b.dataset.example);
-  if (b.dataset.demo) return toast(b.dataset.demo === "save" ? "測試版：接上 AI 之後，這會把回答存成知識庫的一頁分析（wiki/analyses/），先讓你看過再存。"
-    : "測試版：接上 agent 之後，這會把這篇整理成來源頁並更新相關概念頁；動手前會先列出要改哪些頁讓你確認。你的筆記本身不會被改。");
+  if (b.dataset.stop) { api("/api/ai/stop", { id: b.dataset.stop }).catch(() => {}); return; }
+  if (b.dataset.demo) return toast(b.dataset.demo === "save" ? "下一步（會動手的 agent）才有：把回答存成知識庫的一頁分析（wiki/analyses/），存之前先讓你看過。"
+    : "下一步（會動手的 agent）才有：把這篇整理成來源頁並更新相關概念頁；動手前先列出要改哪些頁讓你確認。你的筆記本身不會被改。");
   if (b.hasAttribute("data-ctx-off")) { AI.ctx = null; updateAICtx(); return; }
   if (b.hasAttribute("data-ctx-on")) { AI.ctx = undefined; updateAICtx(); return; }
   if (b.hasAttribute("data-new")) { AI.turns = []; AI.ctx = undefined; renderAI(); return; }
