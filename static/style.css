@@ -405,3 +405,22 @@ h1.renamable:hover { background: var(--panel); }
 #ai-send { white-space: nowrap; flex-shrink: 0; }
 #ai-model, #ai-effort { flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: 5px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 #ai-sends { font-size: 11px; margin-top: 6px; }
+/* v7: the wiki agent in the AI tab */
+.ag .ai-q { background: transparent; border: 1px solid var(--accent); }
+.ag-steps { font-size: 12px; color: var(--muted); margin: 6px 0; }
+.ag-steps summary { cursor: pointer; }
+.ag-step { padding: 1px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-step.bad { color: var(--danger, #c0392b); }
+.ag-plan { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.ag-plan h4, .ag-changes h4 { font-size: 12px; margin: 8px 0 4px; color: var(--muted); }
+.ag-plan ul { margin: 0; padding-left: 18px; }
+.ag-plan li { margin: 3px 0; }
+.ag-sum { font-weight: 600; }
+.ag-note { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; margin-top: 8px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); resize: vertical; }
+.ag-ch { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.ag-ch a.wl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-k { font-size: 11px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); }
+.ag-k.created { color: #2e8b57; border-color: #2e8b57; }
+.ag-k.changed { color: var(--accent); border-color: var(--accent); }
+.ag-k.deleted { color: #c0392b; border-color: #c0392b; }
+.small { font-size: 11px; }

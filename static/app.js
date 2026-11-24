@@ -943,7 +943,7 @@ function renderPanel(p) {
         p.organized.pages.slice(0, 30).map(c => '<a data-path="' + esc(c.path) + '">' + esc(c.title) + "</a>").join("") + "</div>";
     } else if (!p.private) {
       html += '<h3>還沒整理</h3><div class="note-line">' + (p.triage ? "Jev 的判斷：" + esc(QUEUE_LABEL[p.triage.decision] || p.triage.decision) + "（優先度 " + esc(p.triage.priority) + "）。" : "還沒排進佇列。") +
-        "寫成來源頁要 agent 來做（/ingest）。</div>";
+        "</div>" + (S.tree.read_only ? "" : '<div class="ai-acts"><button data-ingest-note="' + esc(p.path) + '">✦ 請 AI 整理這篇</button></div>');
     }
   }
 
@@ -999,6 +999,8 @@ async function runCheck(path) {
 }
 
 $("#panel").addEventListener("click", async e => {
+  const ing = e.target.closest("[data-ingest-note]");
+  if (ing) { startAgent("ingest", { path: ing.dataset.ingestNote }); return; }
   const cmp = e.target.closest("[data-compare]");
   if (cmp) { const s = panelData.suggestions.find(x => x.key === cmp.dataset.compare); if (s) openCompare(s); return; }
   const dis = e.target.closest("[data-dismiss]");
@@ -1416,6 +1418,15 @@ async function showHistory(path) {
   } catch (e) { toast("沒還原：" + e.message); }
 }
 
+async function showAgentDiff(id, path) {
+  let r;
+  try { r = await api("/api/agent/diff?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path)); } catch (e) { toast(e.message); return; }
+  $("#modal .modal").classList.add("wide");
+  await dialog("「" + baseName(path) + "」這次的修改", '<div class="hist-view">' + (r.old ? diffHtml(r.old, r.new) : '<div class="d-add">' + esc(r.new).replace(/\n/g, "<br>") + "</div>") + "</div>" +
+    '<p class="d-legend"><span class="d-add">這次加的</span> <span class="d-del">這次拿掉的</span></p>', "好");
+  $("#modal .modal").classList.remove("wide");
+}
+
 // ============================================================ vaults: start screen and switcher
 
 const tilde = p => String(p || "").replace(/^\/Users\/[^/]+/, "~");
@@ -1504,7 +1515,8 @@ $("#brand").addEventListener("click", async e => {
   const r = $("#brand").getBoundingClientRect();
   const items = v.vaults.filter(x => x.exists).slice(0, 8).map(x => ({ label: (x.path === v.current ? "✓ " : "　 ") + x.name, fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
   items.push(null, { label: "打開其他資料夾…", fn: () => showStart("open") }, { label: "建立新的筆記庫…", fn: () => showStart("create") },
-    { label: "管理清單…", fn: () => showStart() }, null, { label: "在 Finder 中顯示", fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) });
+    { label: "管理清單…", fn: () => showStart() }, null, { label: "✦ 請 AI 檢查知識庫…", fn: () => startAgent("lint", {}) },
+    { label: "在 Finder 中顯示", fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) });
   showMenu(r.left, r.bottom + 4, items);
 });
 
@@ -1579,7 +1591,88 @@ async function askAI(q) {
   renderAI();
 }
 
+// ------------------------------------------------------------ the wiki agent (plan → your OK → act → undo)
+const AGENT_STEPS = 6;
+async function startAgent(task, extra) {
+  if (S.tree.read_only) return toast("這個筆記庫只能看，不能改。");
+  showRight("ai");
+  const m = aiModel(), e = aiEffort();
+  const turn = { kind: "agent", task, status: "starting", steps: [] };
+  AI.turns.push(turn); renderAI();
+  try {
+    const r = await api("/api/agent/start", Object.assign({ task, model: m === "auto" ? null : m, effort: e === "auto" ? null : e, jev: !!jevUsable() }, extra));
+    turn.id = r.id;
+  } catch (err) { turn.status = "error"; turn.error = err.message; renderAI(); return; }
+  pollAgent(turn);
+}
+async function pollAgent(turn) {
+  let last = "";
+  for (;;) {
+    let p;
+    try { p = await api("/api/agent/poll?id=" + turn.id); } catch (e) { turn.status = "error"; turn.error = e.message; break; }
+    Object.assign(turn, p);
+    const sig = p.status + p.steps.length + (p.live || "").length;
+    if (sig !== last) { last = sig; renderAI(); }
+    if (!["planning", "acting"].includes(p.status)) break;
+    await new Promise(res => setTimeout(res, 1000));
+  }
+  renderAI();
+  if (turn.status === "done") { await refreshTree(); }
+}
+const KIND = { created: "新", changed: "改", deleted: "刪" };
+function stepsHtml(t, phase) {
+  const st = t.steps.filter(x => x.phase === phase);
+  if (!st.length) return "";
+  const row = x => '<div class="ag-step' + (x.ok === false ? " bad" : "") + '">' + (x.ok === false ? "✗ " : x.ok ? "· " : "… ") + esc(x.what) + "</div>";
+  const live = (phase === "plan" ? t.status === "planning" : t.status === "acting");
+  if (live) return '<div class="ag-steps">' + st.slice(-AGENT_STEPS).map(row).join("") + "</div>";
+  return '<details class="ag-steps"><summary>' + (phase === "plan" ? "讀了、查了 " : "做了 ") + st.length + " 步</summary>" + st.map(row).join("") + "</details>";
+}
+function planHtml(plan) {
+  if (!plan) return '<div class="banner">AI 沒有給出計畫格式；看上面的說明決定要不要繼續。</div>';
+  const li = xs => xs.map(x => "<li>" + x + "</li>").join("");
+  let h = '<div class="ag-plan"><div class="ag-sum">' + esc(plan.summary || "") + "</div>";
+  if ((plan.takeaways || []).length) h += "<h4>重點</h4><ul>" + li(plan.takeaways.map(esc)) + "</ul>";
+  if ((plan.create || []).length) h += "<h4>新增 " + plan.create.length + " 頁</h4><ul>" + li(plan.create.map(x => md("[[" + x.page + "]]").replace(/^<p>|<\/p>$/g, "") + ' <span class="muted">' + esc(x.type || "") + "</span><div class=\"muted\">" + esc(x.why || "") + "</div>")) + "</ul>";
+  if ((plan.update || []).length) h += "<h4>更新 " + plan.update.length + " 頁</h4><ul>" + li(plan.update.map(x => md("[[" + x.page + "]]").replace(/^<p>|<\/p>$/g, "") + '<div class="muted">' + esc(x.why || "") + "</div>")) + "</ul>";
+  if (plan.notes) h += '<h4>其他</h4><p class="muted">' + esc(plan.notes) + "</p>";
+  return h + "</div>";
+}
+function agentHtml(t) {
+  const name = { ingest: "整理筆記", analysis: "存成分析頁", lint: "檢查知識庫" }[t.task] || "工作";
+  let h = '<div class="ai-turn ag"><div class="ai-q">✦ ' + esc(t.label || name) + "</div>";
+  if (t.model) h += '<div class="ai-ctxline">' + esc(cap(t.model)) + "，" + esc(EFFORT_NAME[t.effort] || t.effort) + (t.jev ? " · Jev 開" : " · Jev 關") + "</div>";
+  h += '<div class="ai-a">';
+  if (t.status === "starting") h += '<div class="muted"><span class="spin"></span> 準備…</div>';
+  if (t.status === "planning") h += '<div class="muted"><span class="spin"></span> 讀筆記、找相關的頁，擬計畫（還不會改任何東西）…</div>';
+  h += stepsHtml(t, "plan");
+  if (t.message) h += md(t.message);
+  if (t.plan !== undefined && t.status !== "planning" && t.status !== "starting" && t.task && (t.message || t.plan)) h += planHtml(t.plan);
+  if (t.status === "waiting") h += '<textarea class="ag-note" rows="2" placeholder="想改計畫的話寫在這裡（可不填），例如：不要建立 X 頁"></textarea>' +
+    '<div class="ai-acts"><button class="primary" data-ag-go="' + esc(t.id) + '">照這樣做</button><button data-ag-cancel="' + esc(t.id) + '">不要做</button></div>' +
+    '<p class="muted small">只會改知識庫（wiki/）；你的筆記不會被改。做完會列出每一頁的修改，可以全部復原。</p>';
+  if (t.status === "acting") h += '<div class="muted"><span class="spin"></span> 動手中：寫來源頁、更新相關的頁…</div>';
+  h += stepsHtml(t, "act");
+  if (t.status === "acting" && t.live) h += '<div class="muted small">' + esc(t.live.slice(-200)) + "</div>";
+  if (t.status === "done" || ((t.status === "stopped" || t.status === "error") && (t.changes || []).length)) {
+    if (t.report && t.status === "done") h += md(t.report);
+    const ch = t.changes || [];
+    h += '<div class="ag-changes"><h4>' + (ch.length ? "改了 " + ch.length + " 個檔案" : "沒有改任何檔案") + (t.undone ? "（已全部復原）" : "") + "</h4>" +
+      ch.map(c => '<div class="ag-ch"><span class="ag-k ' + c.kind + '">' + KIND[c.kind] + "</span>" + '<a class="wl" data-path="' + esc(c.path) + '">' + esc(c.path.replace(/^wiki\//, "").replace(/\.md$/, "")) + "</a>" +
+        '<button class="ghost" data-ag-diff="' + esc(c.path) + '" data-ag-id="' + esc(t.id) + '">差異</button></div>').join("") + "</div>";
+    if ((t.outside || []).length) h += '<div class="banner">注意：這段時間知識庫以外也有檔案變了（可能是你自己改的）：' + t.outside.slice(0, 5).map(esc).join("、") + "</div>";
+    if (ch.length && !t.undone) h += '<div class="ai-acts"><button data-ag-undo="' + esc(t.id) + '">全部復原</button></div>';
+  }
+  if (t.status === "error") h += '<div class="banner">沒有完成：' + esc(t.error || "") + (/log ?in|login|auth|登入/i.test(t.error || "") ? "。在終端機打 <code>claude</code> 登入後再試。" : "") + "</div>";
+  if (t.status === "stopped") h += '<div class="ai-meta">已停止。' + ((t.changes || []).length ? "" : "") + "</div>";
+  if (t.status === "cancelled") h += '<div class="ai-meta">沒有執行。</div>';
+  if (["planning", "acting"].includes(t.status)) h += '<div class="ai-acts"><button data-ag-stop="' + esc(t.id) + '">停止</button></div>';
+  if (t.cost && !["planning", "acting", "starting"].includes(t.status)) h += '<div class="ai-meta">約 $' + t.cost.toFixed(2) + "（以 API 價格換算，用的是你的 Claude 額度）" + (t.seconds ? " · " + Math.round(t.seconds) + " 秒" : "") + "</div>";
+  return h + "</div></div>";
+}
+
 function turnHtml(t) {
+  if (t.kind === "agent") return agentHtml(t);
   let h = '<div class="ai-turn"><div class="ai-q">' + esc(t.q) + "</div>";
   if (t.ctx) h += '<div class="ai-ctxline">背景：' + esc(t.ctx.title) + (t.ctx.private ? "（日記，不送出）" : "") + "</div>";
   if (t.status === "finding") return h + '<div class="ai-a muted"><span class="spin"></span> 找相關的頁…</div></div>';
@@ -1598,8 +1691,8 @@ function turnHtml(t) {
       used.map(u => '<a class="wl" data-path="' + esc(u.path) + '">' + esc(u.title) + "</a>").join("") + "</details>";
   }
   if (t.status === "writing") h += '<div class="ai-acts"><button data-stop="' + esc(t.id) + '">停止</button></div>';
-  else if (t.status === "done") h += '<div class="ai-acts"><button data-demo="save">存成分析頁</button>' +
-    (t.ctx && !t.ctx.private && mine(t.ctx.path) ? '<button data-demo="ingest">整理「' + esc(t.ctx.title) + "」</button>" : "") + "</div>";
+  else if (t.status === "done") h += '<div class="ai-acts"><button data-save="' + AI.turns.indexOf(t) + '">存成分析頁</button>' +
+    (t.ctx && !t.ctx.private && mine(t.ctx.path) ? '<button data-ingest="' + esc(t.ctx.path) + '">整理「' + esc(t.ctx.title) + "」</button>" : "") + "</div>";
   return h + "</div></div>";
 }
 
@@ -1653,8 +1746,28 @@ $("#ai").addEventListener("click", e => {
   if (!b) return;
   if (b.dataset.example) return askAI(b.dataset.example);
   if (b.dataset.stop) { api("/api/ai/stop", { id: b.dataset.stop }).catch(() => {}); return; }
-  if (b.dataset.demo) return toast(b.dataset.demo === "save" ? "下一步（會動手的 agent）才有：把回答存成知識庫的一頁分析（wiki/analyses/），存之前先讓你看過。"
-    : "下一步（會動手的 agent）才有：把這篇整理成來源頁並更新相關概念頁；動手前先列出要改哪些頁讓你確認。你的筆記本身不會被改。");
+  if (b.dataset.save !== undefined) {
+    const t = AI.turns[+b.dataset.save];
+    return startAgent("analysis", { q: t.q, answer: t.text, sources: (t.used || []).map(u => u.path) });
+  }
+  if (b.dataset.ingest) return startAgent("ingest", { path: b.dataset.ingest });
+  if (b.dataset.agGo) {
+    const note = (b.closest(".ai-a").querySelector(".ag-note") || {}).value || "";
+    const t = AI.turns.find(x => x.id === b.dataset.agGo);
+    api("/api/agent/approve", { id: b.dataset.agGo, note }).then(() => { t.status = "acting"; renderAI(); pollAgent(t); }).catch(err => toast(err.message));
+    return;
+  }
+  if (b.dataset.agCancel) { const t = AI.turns.find(x => x.id === b.dataset.agCancel); api("/api/agent/stop", { id: t.id }).then(() => { t.status = "cancelled"; renderAI(); }); return; }
+  if (b.dataset.agStop) { api("/api/agent/stop", { id: b.dataset.agStop }).catch(() => {}); return; }
+  if (b.dataset.agDiff) return showAgentDiff(b.dataset.agId, b.dataset.agDiff);
+  if (b.dataset.agUndo) {
+    const t = AI.turns.find(x => x.id === b.dataset.agUndo);
+    dialog("全部復原？", "<p>把這次改的 " + t.changes.length + " 個知識庫檔案放回改之前的樣子；新建的頁移到 <code>.trash/</code>。這次寫的內容會先留成一版。</p>", "全部復原", true).then(ok => {
+      if (!ok) return;
+      api("/api/agent/undo", { id: t.id }).then(async () => { t.undone = true; renderAI(); await refreshTree(); toast("復原了。"); }).catch(err => toast(err.message));
+    });
+    return;
+  }
   if (b.hasAttribute("data-ctx-off")) { AI.ctx = null; updateAICtx(); return; }
   if (b.hasAttribute("data-ctx-on")) { AI.ctx = undefined; updateAICtx(); return; }
   if (b.hasAttribute("data-new")) { AI.turns = []; AI.ctx = undefined; renderAI(); return; }

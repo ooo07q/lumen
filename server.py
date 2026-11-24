@@ -1631,6 +1631,351 @@ def api_ai_stop(body):
     return 200, {"ok": True}
 
 
+# ------------------------------------------------------------------ the wiki agent (Claude Code, writes wiki/ only)
+# Two phases in one Claude Code conversation: plan (reads only, ends with a ```plan block the user approves or
+# changes), then act (writes). Limits, enforced by Claude Code's permission rules and the app's own tool server:
+# no shell, no web; Read/Glob/Grep inside the vault except the journal, .notesapp/, .trash/ and pages drawn from
+# the journal; Edit/Write only under wiki/; the app's tools through tools/agent_mcp.py (which refuses the same).
+# Before acting the app copies every wiki page, so afterwards it lists each change, keeps the old text as a
+# version, and can undo the whole run; it also checks that nothing outside wiki/ changed.
+
+AGENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent")
+AGENT_JOBS = {}
+AGENT_LOCK = threading.Lock()
+SKIP_TOP = {".notesapp", ".trash", ".obsidian", ".git"}
+
+
+def wiki_snapshot():
+    out, root = {}, os.path.join(VAULT, "wiki")
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if not x.startswith(".")]
+        for f in files:
+            if f.endswith((".md", ".base", ".canvas")):
+                full = os.path.join(d, f)
+                out[os.path.relpath(full, VAULT)] = open(full, encoding="utf-8", errors="replace").read()
+    return out
+
+
+def outside_snapshot():
+    out = {}
+    for d, dirs, files in os.walk(VAULT):
+        rel_d = os.path.relpath(d, VAULT)
+        if rel_d == ".":
+            dirs[:] = [x for x in dirs if x != "wiki" and x not in SKIP_TOP]
+        for f in files:
+            full = os.path.join(d, f)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            out[os.path.relpath(full, VAULT)] = (st.st_mtime, st.st_size)
+    return out
+
+
+def agent_rules():
+    v = os.path.realpath(VAULT)
+    a = lambda tool, rel="": "%s(/%s/%s**)" % (tool, v, rel)           # absolute: //path in rule syntax
+    allow = [a("Read"), a("Glob"), a("Grep"), "mcp__notes"]
+    write = [a("Edit", "wiki/"), a("Write", "wiki/")]
+    deny = []
+    for rel in [wiki.JOURNAL_REL.rstrip("/") + "/", ".notesapp/", ".trash/"]:
+        deny += [a("Read", rel), a("Glob", rel), a("Grep", rel)]
+    vv = V.fresh()
+    for p in vv.pages:
+        if p.name not in vv.sendable:                                   # drawn from the journal
+            deny += ["Read(/%s/%s)" % (v, p.rel), "Edit(/%s/%s)" % (v, p.rel)]
+    return allow, write, deny
+
+
+def agent_facts(job):
+    notes = wiki.RAW_REL + "/" if wiki.RAW_REL else "the whole vault except wiki/, tools/, templates/ and hidden folders"
+    return ("Vault: %s\nThe user's notes: %s\nJournal (off limits): %s/\nToday: %s\nJev: %s\n"
+            "The user's language: Traditional Chinese (繁體中文); write your messages to the user in it.\n"
+            % (VAULT, notes, wiki.JOURNAL_REL, time.strftime("%Y-%m-%d"), "on" if job["jev"] else "off"))
+
+
+def agent_cmd(job, phase):
+    allow, write, deny = agent_rules()
+    env = {"NOTES_VAULT": VAULT, "NOTES_DATA": wiki.DATA, "NOTES_AGENT_PHASE": phase,
+           "NOTES_AGENT_JEV": "1" if job["jev"] else "0", "NOTES_AGENT_TASK": job["task"], "PYTHONIOENCODING": "utf-8"}
+    for k in ("TYPESAFE_API_KEY", "HOME", "PATH"):
+        if os.environ.get(k):
+            env[k] = os.environ[k]
+    mcp = {"mcpServers": {"notes": {"command": sys.executable,
+                                    "args": [os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "agent_mcp.py")],
+                                    "env": env}}}
+    tools = "Read,Glob,Grep" + (",Edit,Write" if phase == "act" else "")
+    cmd = [job["bin"], "-p", "--output-format", "stream-json", "--verbose",
+           "--setting-sources", "", "--strict-mcp-config", "--mcp-config", json.dumps(mcp),
+           "--add-dir", VAULT, "--tools", tools, "--permission-mode", "dontAsk", "--permission-prompts", "none",
+           "--allowedTools"] + allow + (write if phase == "act" else []) + ["--disallowedTools"] + deny + [
+           "--model", job["model"], "--effort", job["effort"],
+           "--append-system-prompt-file", os.path.join(AGENT_DIR, "instructions.md")]
+    cmd += ["--session-id", job["session"]] if phase == "plan" else ["--resume", job["session"]]
+    return cmd
+
+
+def short_path(path):
+    try:
+        rel = os.path.relpath(path, VAULT)
+        return path if rel.startswith("..") else rel
+    except ValueError:
+        return path
+
+
+def activity(block):
+    name, inp = block.get("name", ""), block.get("input") or {}
+    if name == "Read":
+        return "讀 " + short_path(inp.get("file_path", ""))
+    if name in ("Glob", "Grep"):
+        return "找 " + str(inp.get("pattern", ""))
+    if name == "Edit":
+        return "改 " + short_path(inp.get("file_path", ""))
+    if name == "Write":
+        return "寫 " + short_path(inp.get("file_path", ""))
+    if name.startswith("mcp__notes__"):
+        tool = name[len("mcp__notes__"):]
+        arg = inp.get("file") or inp.get("query") or inp.get("question") or inp.get("title") or inp.get("source") or ""
+        return "%s %s" % (tool, short_path(str(arg)) if arg else "")
+    return name
+
+
+def run_agent_phase(job, phase, message):
+    import subprocess
+    cwd = os.path.join(APP, "agent")
+    os.makedirs(cwd, exist_ok=True)
+    job["status"] = "planning" if phase == "plan" else "acting"
+    job["text"] = ""
+    try:
+        env = dict(os.environ, MCP_TOOL_TIMEOUT="900000")
+        proc = subprocess.Popen(agent_cmd(job, phase), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env,
+                                start_new_session=True)   # its own process group: stopping it stops the tools too
+        job["proc"] = proc
+        proc.stdin.write(message)
+        proc.stdin.close()
+        pending = {}
+        for line in proc.stdout:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") == "assistant":
+                for b in d["message"].get("content") or []:
+                    if b.get("type") == "text" and b.get("text", "").strip():
+                        job["text"] += ("\n\n" if job["text"] else "") + b["text"]
+                    elif b.get("type") == "tool_use":
+                        item = {"phase": phase, "what": activity(b), "ok": None}
+                        job["steps"].append(item)
+                        pending[b.get("id")] = item
+            elif d.get("type") == "user":
+                for b in (d.get("message") or {}).get("content") or []:
+                    if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
+                        pending.pop(b["tool_use_id"])["ok"] = not b.get("is_error")
+            elif d.get("type") == "result":
+                job["cost"] += float(d.get("total_cost_usd") or 0)
+                job["denied"] += len(d.get("permission_denials") or [])
+                if d.get("is_error"):
+                    job["error"] = str(d.get("result") or d.get("subtype") or "Claude Code 回報錯誤")
+        proc.wait(timeout=30)
+        if proc.returncode and not job["error"] and not job["stopped"]:
+            job["error"] = (proc.stderr.read() or "").strip()[-400:] or "Claude Code 結束時出錯（代碼 %s）" % proc.returncode
+    except Exception as e:
+        job["error"] = str(e)
+
+
+def parse_plan(text):
+    m = list(re.finditer(r"```plan\s*\n(.*?)```", text, re.S))
+    if not m:
+        return text, None
+    try:
+        plan = json.loads(m[-1].group(1))
+    except ValueError:
+        return text, None
+    return (text[:m[-1].start()] + text[m[-1].end():]).strip(), plan
+
+
+def agent_plan(job):
+    with AGENT_LOCK:
+        run_agent_phase(job, "plan", agent_facts(job) + "\n" + job["task_text"] + "\n\nPhase: plan.")
+    if job["stopped"]:
+        job["status"] = "stopped"
+    elif job["error"]:
+        job["status"] = "error"
+    else:
+        job["message"], job["plan"] = parse_plan(job["text"])
+        job["status"] = "waiting"
+    job["seconds"] = round(time.time() - job["started"], 1)
+
+
+def agent_act(job, note):
+    with AGENT_LOCK:
+        job["before"] = wiki_snapshot()
+        outside = outside_snapshot()
+        msg = "The user approved the plan." + (" Their changes: " + note if note else "") + "\n\nPhase: act."
+        run_agent_phase(job, "act", msg)
+        after = wiki_snapshot()
+        changes = []
+        for rel in sorted(set(job["before"]) | set(after)):
+            old, new = job["before"].get(rel), after.get(rel)
+            if old == new:
+                continue
+            kind = "created" if old is None else "deleted" if new is None else "changed"
+            changes.append({"path": rel, "kind": kind})
+            if old is not None:
+                keep_version(rel, old, force=True)
+        job["changes"] = changes
+        now = outside_snapshot()
+        job["outside"] = sorted(r for r in set(outside) | set(now) if outside.get(r) != now.get(r))
+        job["report"] = job["text"]
+        V.fresh()
+    job["status"] = "stopped" if job["stopped"] else "error" if job["error"] else "done"
+    job["seconds"] = round(time.time() - job["started"], 1)
+
+
+def note_title(rel):
+    p = V.fresh().by_rel.get(rel)
+    return p.name if p else os.path.splitext(os.path.basename(rel))[0]
+
+
+def api_agent_start(body):
+    if READ_ONLY:
+        return 403, {"error": RO_ERR}
+    exe = claude_bin()
+    if not exe:
+        return 400, {"error": "找不到 Claude Code（claude 指令）。先安裝並登入 Claude Code。"}
+    if any(j["status"] in ("planning", "acting") for j in AGENT_JOBS.values()):
+        return 409, {"error": "另一個工作還在進行，等它結束或停止它。"}
+    task = body.get("task")
+    v = V.fresh()
+    if task == "ingest":
+        rel = safe_rel(body.get("path") or "")
+        if not rel or not rel.endswith(".md") or not is_raw(rel) or not os.path.isfile(os.path.join(VAULT, rel)):
+            return 400, {"error": "只能整理你自己的筆記"}
+        if is_private(rel):
+            return 400, {"error": "日記不交給 AI"}
+        title = note_title(rel)
+        src = v.source_of.get(rel)
+        text = "Task: ingest the note `%s`." % rel
+        if src:
+            text += " It already has a source page, [[%s]]: update that page and the pages it touched with " \
+                    "what is new or was missed, instead of making another source page." % src
+        label = "整理「%s」" % title
+    elif task == "analysis":
+        q, answer = str(body.get("q") or "").strip(), str(body.get("answer") or "").strip()
+        if not q or not answer:
+            return 400, {"error": "沒有問題或回答"}
+        used = [v.by_rel[r].name for r in body.get("sources") or [] if r in v.by_rel and v.by_rel[r].name in v.sendable]
+        text = ("Task: file this answer as an analysis page.\n\nQuestion: %s\n\nPages the answer drew on: %s\n\n"
+                "The answer:\n<answer>\n%s\n</answer>" % (q, ", ".join("[[%s]]" % u for u in used) or "(none)", answer[:30000]))
+        label = "存成分析頁：%s" % q[:40]
+    elif task == "lint":
+        text = "Task: check the wiki."
+        label = "檢查知識庫"
+    else:
+        return 400, {"error": "不認得的工作"}
+    model = body.get("model") if body.get("model") in MODELS else "sonnet"
+    effort = body.get("effort") if body.get("effort") in EFFORTS else ("medium" if task == "analysis" else "high")
+    import uuid
+    jid = secrets.token_hex(6)
+    job = AGENT_JOBS[jid] = {
+        "id": jid, "task": task, "label": label, "task_text": text, "bin": exe, "model": model, "effort": effort,
+        "jev": bool(body.get("jev")) and has_jev(), "session": str(uuid.uuid4()), "status": "planning",
+        "steps": [], "text": "", "message": "", "plan": None, "report": "", "changes": [], "outside": [],
+        "error": None, "stopped": False, "proc": None, "cost": 0.0, "denied": 0, "started": time.time(),
+        "undone": False, "vault": VAULT}
+    threading.Thread(target=agent_plan, args=(job,), daemon=True).start()
+    return 200, {"id": jid}
+
+
+def agent_view(job):
+    keys = ("id", "task", "label", "model", "effort", "jev", "status", "steps", "message", "plan", "report",
+            "changes", "outside", "error", "cost", "denied", "undone", "seconds")
+    out = {k: job.get(k) for k in keys}
+    if job["status"] in ("planning", "acting"):
+        out["live"] = job["text"]
+    return out
+
+
+def agent_job(body_or_q):
+    jid = body_or_q.get("id")
+    jid = jid[0] if isinstance(jid, list) else jid
+    job = AGENT_JOBS.get(str(jid or ""))
+    if job and job["vault"] != VAULT:
+        return None
+    return job
+
+
+def api_agent_poll(q):
+    job = agent_job(q)
+    return (200, agent_view(job)) if job else (404, {"error": "沒有這個工作"})
+
+
+def api_agent_approve(body):
+    job = agent_job(body)
+    if not job or job["status"] != "waiting":
+        return 409, {"error": "這個計畫不能執行了"}
+    if READ_ONLY:
+        return 403, {"error": RO_ERR}
+    job["status"] = "acting"
+    threading.Thread(target=agent_act, args=(job, str(body.get("note") or "").strip()[:4000]), daemon=True).start()
+    return 200, {"ok": True}
+
+
+def api_agent_stop(body):
+    job = agent_job(body)
+    if not job:
+        return 404, {"error": "沒有這個工作"}
+    if job["status"] == "waiting":
+        job["status"] = "cancelled"
+    elif job["status"] in ("planning", "acting"):
+        job["stopped"] = True
+        if job["proc"]:
+            import signal
+            try:
+                os.killpg(job["proc"].pid, signal.SIGKILL)  # Claude Code and the tool server it started
+            except OSError:
+                job["proc"].kill()
+    return 200, {"ok": True}
+
+
+def api_agent_undo(body):
+    """Put every wiki file the run touched back as it was (the run's own text is kept as a version first)."""
+    job = agent_job(body)
+    if not job or not job.get("before") or job["undone"]:
+        return 409, {"error": "沒有可以復原的修改"}
+    if READ_ONLY:
+        return 403, {"error": RO_ERR}
+    with AGENT_LOCK:
+        for c in job["changes"]:
+            full = os.path.join(VAULT, c["path"])
+            old = job["before"].get(c["path"])
+            if os.path.exists(full):
+                keep_version(c["path"], open(full, encoding="utf-8", errors="replace").read(), force=True)
+            if old is None:
+                if os.path.exists(full):
+                    os.makedirs(TRASH, exist_ok=True)
+                    os.rename(full, os.path.join(TRASH, free_name(TRASH, os.path.basename(full))))
+            else:
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                write_text(full, old)
+        job["undone"] = True
+        V.fresh()
+    return 200, {"ok": True}
+
+
+def api_agent_diff(q):
+    job = agent_job(q)
+    rel = safe_rel(q.get("path", [""])[0])
+    if not job:
+        return 404, {"error": "沒有這個工作"}
+    if not any(c["path"] == rel for c in job.get("changes") or []):
+        return 404, {"error": "這次沒有改這個檔案"}
+    full = os.path.join(VAULT, rel)
+    now = open(full, encoding="utf-8", errors="replace").read() if os.path.exists(full) else ""
+    return 200, {"old": job["before"].get(rel) or "", "new": now}
+
+
 # ------------------------------------------------------------------ vaults (work with no vault open)
 
 def vault_info(path):
@@ -1751,12 +2096,15 @@ def api_reveal(body):
 
 GET = {"/api/tree": api_tree, "/api/changes": api_changes, "/api/note": api_note, "/api/panel": api_panel,
        "/api/search": api_search, "/api/queue": api_queue, "/api/history": api_history,
-       "/api/attachments": api_attachments, "/api/t2s": api_t2s, "/api/ai/poll": api_ai_poll}
+       "/api/attachments": api_attachments, "/api/t2s": api_t2s, "/api/ai/poll": api_ai_poll,
+       "/api/agent/poll": api_agent_poll, "/api/agent/diff": api_agent_diff}
 POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_save,
         "/api/journal": api_journal, "/api/attach": api_attach, "/api/move": api_move,
         "/api/delete": api_delete, "/api/html2note": api_html2note, "/api/restore": api_restore, "/api/import": api_import,
         "/api/new": api_new, "/api/rename": api_rename, "/api/history/restore": api_history_restore,
-        "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop}
+        "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop,
+        "/api/agent/start": api_agent_start, "/api/agent/approve": api_agent_approve, "/api/agent/stop": api_agent_stop,
+        "/api/agent/undo": api_agent_undo}
 # these work with no vault open
 GET_APP = {"/api/vaults": api_vaults, "/api/browse": api_browse}
 POST_APP = {"/api/vault/open": api_vault_open, "/api/vault/create": api_vault_create, "/api/vault/forget": api_vault_forget}
