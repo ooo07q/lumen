@@ -1516,8 +1516,11 @@ $("#brand").addEventListener("click", async e => {
 
 const AI = { turns: [], ctx: undefined };       // ctx undefined: follow the open note; null: none
 const AI_MODELS = [["auto", "自動（Jev 選）"], ["haiku", "Haiku：快、省"], ["sonnet", "Sonnet：一般"], ["opus", "Opus：最強、最耗額度"]];
-function aiModel() { try { return localStorage.getItem("notesapp.aiModel") || "auto"; } catch (e) { return "auto"; } }
-function setAiModel(m) { try { localStorage.setItem("notesapp.aiModel", m); } catch (e) {} }
+const AI_EFFORTS = [["auto", "思考：自動"], ["low", "思考：少"], ["medium", "思考：一般"], ["high", "思考：仔細"]];
+const EFFORT_NAME = { low: "想得少", medium: "一般", high: "想得仔細" };
+function pref(k) { try { return localStorage.getItem("notesapp." + k) || "auto"; } catch (e) { return "auto"; } }
+function setPref(k, v) { try { localStorage.setItem("notesapp." + k, v); } catch (e) {} }
+const aiModel = () => pref("aiModel"), aiEffort = () => pref("aiEffort");
 S.rtab = "note";
 
 function questionLike(raw) {
@@ -1559,7 +1562,7 @@ async function askAI(q) {
   const history = AI.turns.filter(t => t !== turn && t.status === "done").map(t => ({ q: t.q, a: t.text }));
   try {
     const a = await api("/api/ai/ask", { q, context: turn.ctx && !turn.ctx.private ? turn.ctx.path : null,
-      sources: turn.sources.map(x => x.path), history, model: aiModel(), jev: !!jevUsable() });
+      sources: turn.sources.map(x => x.path), history, model: aiModel(), effort: aiEffort(), jev: !!jevUsable() });
     Object.assign(turn, { id: a.id, used: a.used, ctxUsed: a.context, choice: a.choice, status: "writing" });
   } catch (e) { turn.status = "error"; turn.error = e.message; renderAI(); return; }
   renderAI();
@@ -1590,7 +1593,7 @@ function turnHtml(t) {
   const used = t.used || [];
   if (t.status !== "writing" && (used.length || t.ctxUsed)) {
     h += '<details class="ai-used"><summary>讀了' + (t.ctxUsed ? "背景筆記和 " : " ") + used.length + " 頁" +
-      (t.mode === "jev" ? "（Jev 找的）" : "（關鍵字找的" + (t.searchError ? "，Jev 沒回應" : "") + "）") + (t.model ? " · " + esc(cap(t.model)) + (t.choice === "auto" ? "（" + esc(t.why) + "）" : "") : "") + (t.seconds ? " · " + t.seconds + " 秒" : "") + "</summary>" +
+      (t.mode === "jev" ? "（Jev 找的）" : "（關鍵字找的" + (t.searchError ? "，Jev 沒回應" : "") + "）") + (t.model ? " · " + esc(cap(t.model)) + "，" + esc(EFFORT_NAME[t.effort] || t.effort) + (t.why ? "（" + esc(t.why) + "）" : "") : "") + (t.seconds ? " · " + t.seconds + " 秒" : "") + "</summary>" +
       (t.ctxUsed ? '<a class="wl" data-path="' + esc(t.ctxUsed.path) + '">' + esc(t.ctxUsed.title) + "</a>（背景）" : "") +
       used.map(u => '<a class="wl" data-path="' + esc(u.path) + '">' + esc(u.title) + "</a>").join("") + "</details>";
   }
@@ -1601,7 +1604,10 @@ function turnHtml(t) {
 }
 
 const cap = m => m ? m[0].toUpperCase() + m.slice(1) : "";
-document.addEventListener("change", e => { if (e.target.id === "ai-model") setAiModel(e.target.value); });
+document.addEventListener("change", e => {
+  if (e.target.id === "ai-model") setPref("aiModel", e.target.value);
+  if (e.target.id === "ai-effort") setPref("aiEffort", e.target.value);
+});
 
 function renderAI() {
   const el = $("#ai");
@@ -1621,6 +1627,8 @@ function renderAI() {
     '<div class="ai-composer"><div id="ai-ctx" class="ai-ctx"></div>' +
     '<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行）"></textarea>' +
     '<div class="ai-send-row"><select id="ai-model" title="回答用的模型">' + AI_MODELS.map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
+    "</select>" +
+    '<select id="ai-effort" title="想多深：自動＝照你在問題裡說的，或 Jev 判斷">' + AI_EFFORTS.map(([v, l]) => '<option value="' + v + '"' + (v === aiEffort() ? " selected" : "") + ">" + l + "</option>").join("") +
     '</select><button class="primary" id="ai-send">送出</button></div><div id="ai-sends" class="muted"></div></div>';
   const inp = $("#ai-input"); inp.value = draft; if (focused) inp.focus();
   const c = $("#ai-conv"); if (atBottom) c.scrollTop = c.scrollHeight; else if (conv0) c.scrollTop = conv0.scrollTop;

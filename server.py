@@ -1469,6 +1469,11 @@ ROUTE_Q = {
             "Step by step: it is only right after weighing evidence, comparing alternatives or checking an argument.",
         ]},
 }
+ROUTE_Q["requested"] = {"type": "choice", "instructions":
+    "Does `question` itself say how much thought or detail the answer should get?", "criteria": {
+        "none": "It says nothing about how carefully, briefly or thoroughly to answer.",
+        "less": "It asks for a quick, short or simple answer (e.g. 簡單說, 一句話, 快速, briefly, in short).",
+        "more": "It asks for careful, deep or thorough thinking (e.g. 仔細想, 深入分析, 認真思考, think hard, in depth)."}}
 ROUTE_WHY = ["查一個事實", "說明一兩頁的內容", "要連結、比較好幾頁", "要深入論證或寫長文"]
 
 
@@ -1478,17 +1483,41 @@ def ai_model():
 
 
 def route(job):
-    """(model, effort, why) for an "auto" question."""
-    if not job["jev"]:
-        return "sonnet", "medium", "Jev 關著，用預設的 Sonnet"
-    st = job["route_state"]
-    try:
-        a = jev.ask(json.dumps(st, ensure_ascii=False), ROUTE_Q)
+    """(model, effort, why). A choice the user made in the menus wins; then what the question itself asks for
+    ("簡單說", "仔細想"); then Jev's judgment of the question; without Jev, Sonnet at medium."""
+    mc, ec = job["choice"], job["effort_choice"]
+    a, why = None, []
+    if (mc == "auto" or ec == "auto") and job["jev"]:
+        try:
+            a = jev.ask(json.dumps(job["route_state"], ensure_ascii=False), ROUTE_Q)
+        except Exception:
+            why.append("Jev 沒回應")
+    elif (mc == "auto" or ec == "auto"):
+        why.append("Jev 關著")
+    if mc != "auto":
+        model = mc
+        why.append("模型是你選的")
+    elif a:
         d, t = jev.score(a, "difficulty"), jev.score(a, "deliberation")
-    except Exception:
-        return "sonnet", "medium", "Jev 沒回應，用預設的 Sonnet"
-    model = "haiku" if d == 0 else "opus" if d >= 3 or (d == 2 and t >= 2) else "sonnet"
-    return model, EFFORTS[min(t, 2)], "Jev 判斷：" + ROUTE_WHY[min(d, 3)]
+        model = "haiku" if d == 0 else "opus" if d >= 3 or (d == 2 and t >= 2) else "sonnet"
+        why.append("Jev 判斷：" + ROUTE_WHY[min(d, 3)])
+    else:
+        model = "sonnet"
+        why.append("用預設的 Sonnet")
+    asked = jev.choice(a, "requested")[0] if a else None
+    if ec != "auto":
+        effort = ec
+        why.append("思考深度是你選的")
+    elif asked in ("less", "more"):
+        effort = "low" if asked == "less" else "high"
+        why.append("你在問題裡要求" + ("簡短" if asked == "less" else "想仔細"))
+    elif a:
+        effort = EFFORTS[min(jev.score(a, "deliberation"), 2)]
+    else:
+        effort = "medium"
+    if model == "opus" and ec == "auto" and effort != "high":
+        effort = "high"                           # Opus leaks its reasoning far more often below high
+    return model, effort, "；".join(why)
 
 
 def run_once(job, msg, cwd):
@@ -1540,11 +1569,7 @@ def run_ai(job, msg):
     if os.environ.get("NOTES_AI_DEBUG"):
         open(os.path.join(cwd, "last_prompt.txt"), "w", encoding="utf-8").write(msg)
     try:
-        if job["choice"] == "auto":
-            job["model"], job["effort"], job["why"] = route(job)
-        else:
-            # Opus thinks first far more often at high effort (and leaks its reasoning when it doesn't)
-            job["model"], job["effort"], job["why"] = job["choice"], "high" if job["choice"] == "opus" else "medium", "你選的"
+        job["model"], job["effort"], job["why"] = route(job)
         tries = 0
         while not job["stopped"]:
             job["text"], job["error"] = "", None
@@ -1575,11 +1600,12 @@ def api_ai_ask(body):
     msg, used, ctx_used = ai_prompt(body)
     jid = secrets.token_hex(6)
     choice = body.get("model") if body.get("model") in MODELS + ("auto",) else ai_model()
+    effort_choice = body.get("effort") if body.get("effort") in EFFORTS + ("auto",) else "auto"
     v = V.fresh()
     pages = [{"title": u["title"], "summary": str(v.by_rel[u["path"]].fm.get("summary", ""))[:300]} for u in used]
     state = {"question": str(body.get("q") or "")[:2000], "open_note": ctx_used["title"] if ctx_used else "",
              "earlier": [str(h.get("q") or "")[:500] for h in (body.get("history") or [])][-2:], "pages": pages}
-    job = AI_JOBS[jid] = {"bin": exe, "choice": choice, "model": None, "effort": None, "why": "", "text": "",
+    job = AI_JOBS[jid] = {"bin": exe, "choice": choice, "effort_choice": effort_choice, "model": None, "effort": None, "why": "", "text": "",
                           "status": "running", "error": None, "stopped": False, "started": time.time(), "proc": None,
                           "jev": bool(body.get("jev")) and has_jev(), "route_state": state}
     for k in [k for k, j in AI_JOBS.items() if j["status"] != "running" and time.time() - j["started"] > 3600]:
