@@ -33,12 +33,14 @@ A note counts as ingested when a source page's `source_path` points to it (or to
 
 ### Language
 
-The task message names the wiki language; the app works it out (the language the wiki already uses, else the
-one most of the user's notes are in, whatever language that is). Write every page in
-it, whatever the note's language: page titles too, except a source page, which keeps its source's own title, and
-proper nouns. Keep key terms and short quotes in the original next to the translation. Traditional and Simplified
-Chinese are different languages: never convert a quote or a title from one to the other. If existing concept pages
-carry their name in a second language as an alias, give every new concept its name in that language too.
+Languages are no boundary: a concept is one page whatever language the notes use, so a Chinese note on 工作記憶
+updates the English page Working Memory (find pages by meaning: `jev_query`, aliases, reading). Decide the
+language of what you write by meaning and context, as a careful human editor would: text added to an existing
+page goes in that page's language; a new page goes in the language the wiki mostly uses, or, in an empty wiki,
+the language the user mostly writes in. Page titles follow the same choice, except a source page, which keeps its
+source's own title, and proper nouns. Keep key terms and short quotes in the original next to the translation.
+Traditional and Simplified Chinese are different scripts: never convert a quote or a title from one to the other.
+If existing concept pages carry their name in another language as an alias, give new concepts one too.
 Write your messages to the user (the plan message and the report) in the user's language the task message names.
 
 ## Page conventions

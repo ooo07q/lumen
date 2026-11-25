@@ -583,110 +583,6 @@ def has_jev():
     return bool(os.environ.get("TYPESAFE_API_KEY") or os.path.exists(jev.KEY_FILE))
 
 
-# ------------------------------------------------------------------ the wiki's language (per vault, automatic)
-# No setting and no question: the language the wiki's pages already use; in an empty wiki, the language most of
-# the user's notes are in (any language). Detection runs here, on this Mac; nothing is sent anywhere.
-
-LANGS = {"en": "English", "zh-Hant": "Traditional Chinese (繁體中文)", "zh-Hans": "Simplified Chinese (简体中文)",
-         "ja": "Japanese (日本語)", "ko": "Korean (한국어)", "fr": "French (français)", "de": "German (Deutsch)",
-         "es": "Spanish (español)", "it": "Italian (italiano)", "pt": "Portuguese (português)",
-         "nl": "Dutch (Nederlands)", "vi": "Vietnamese (Tiếng Việt)", "ru": "Russian (русский)",
-         "uk": "Ukrainian (українська)", "el": "Greek (Ελληνικά)", "ar": "Arabic (العربية)", "he": "Hebrew (עברית)",
-         "hi": "Hindi (हिन्दी)", "th": "Thai (ไทย)"}
-LANG_ZH = {"en": "英文", "zh-Hant": "繁體中文", "zh-Hans": "簡體中文", "ja": "日文", "ko": "韓文", "fr": "法文",
-           "de": "德文", "es": "西班牙文", "it": "義大利文", "pt": "葡萄牙文", "nl": "荷蘭文", "vi": "越南文",
-           "ru": "俄文", "uk": "烏克蘭文", "el": "希臘文", "ar": "阿拉伯文", "he": "希伯來文", "hi": "印地文",
-           "th": "泰文"}
-# Latin-script languages told apart by their commonest short words
-STOP = {
-    "en": "the and of to is in that it for was with as on are this be by not or have from",
-    "fr": "le la les et des est une dans que pour qui pas sur du au avec ce sont par",
-    "de": "der die das und ist nicht mit den ein eine zu auf sich dem auch von wird sind",
-    "es": "el la los las y que de en es por con una para del se no lo como más",
-    "it": "il la di che e è per un una non sono con del della gli le si come anche",
-    "pt": "o a os as e que de do da em um uma para com não é se por mais como",
-    "nl": "de het een en van is dat niet met op te zijn voor er die ook aan bij",
-    "vi": "và của là có không những được trong cho các một người này với đã",
-}
-STOP = {k: set(v.split()) for k, v in STOP.items()}
-SCRIPTS = [("ja", r"[\u3040-\u30ff]"), ("ko", r"[\uac00-\ud7af]"), ("el", r"[\u0370-\u03ff]"),
-           ("ar", r"[\u0600-\u06ff]"), ("he", r"[\u0590-\u05ff]"), ("hi", r"[\u0900-\u097f]"),
-           ("th", r"[\u0e00-\u0e7f]"), ("cyr", r"[\u0400-\u04ff]")]
-_ZH_SETS = []
-
-
-def zh_sets():
-    if not _ZH_SETS:
-        try:
-            d = json.load(open(os.path.join(HERE, "tools", "t2s_chars.json"), encoding="utf-8"))
-            _ZH_SETS[:] = [{k for k, v in d["t2s"].items() if k != v}, set(d["simplified_only"])]
-        except (OSError, ValueError, KeyError):
-            _ZH_SETS[:] = [set(), set()]
-    return _ZH_SETS
-
-
-def text_lang(text):
-    """The main language of a text as a code from LANGS, or None (too little text)."""
-    text = re.sub(r"^---\n.*?\n---\n", "", text, flags=re.S)
-    text = re.sub(r"```.*?```|https?://\S+|!?\[\[[^\]]*\]\]|<[^>]+>", " ", text, flags=re.S)
-    han = re.findall(r"[\u4e00-\u9fff]", text)
-    counts = {code: len(re.findall(rx, text)) for code, rx in SCRIPTS}
-    latin = re.findall(r"[^\W\d_]{2,}", re.sub(r"[^\x00-\u024f\u1e00-\u1eff]", " ", text).lower())
-    # a CJK or other non-Latin character carries about a word's meaning
-    units = {"han": len(han), "latin": len(latin), **counts}
-    if sum(units.values()) < 30:
-        return None
-    top = max(units, key=units.get)
-    if top == "han":
-        if counts["ja"] > len(han) * 0.1:                        # kana among the kanji: Japanese
-            return "ja"
-        trad, simp = zh_sets()
-        return "zh-Hans" if sum(c in simp for c in han) > sum(c in trad for c in han) else "zh-Hant"
-    if top == "cyr":
-        return "uk" if re.search(r"[іїєґІЇЄҐ]", text) else "ru"
-    if top != "latin":
-        return top
-    hits = {k: sum(w in sw for w in latin) for k, sw in STOP.items()}
-    best = max(hits, key=hits.get)
-    return best if hits[best] else "en"
-
-
-def detect_lang():
-    """Share of each language among the wiki's own pages and among the user's notes (not the journal)."""
-    def shares(texts):
-        c = Counter(l for l in (text_lang(t) for t in texts) if l)
-        n = sum(c.values())
-        return {k: round(v / n, 2) for k, v in c.most_common()} if n else {}
-    v = V.fresh()
-    wiki_texts = [p.body for p in v.pages if p.type in ("concept", "entity", "analysis", "overview")][:400]
-    note_texts = []
-    for rel in wiki.raw_files():
-        if not rel.endswith(".md") or is_private(rel):
-            continue
-        try:
-            with open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace") as f:
-                note_texts.append(f.read(6000))
-        except OSError:
-            pass
-        if len(note_texts) >= 600:
-            break
-    return {"wiki": shares(wiki_texts), "notes": shares(note_texts)}
-
-
-def wiki_lang():
-    """(code or None, how, detection). how: wiki (the pages' language) | notes (most notes') | empty."""
-    d = detect_lang()
-    for src in ("wiki", "notes"):
-        if d[src]:
-            return next(iter(d[src])), src, d
-    return None, "empty", d
-
-
-def api_lang(q):
-    code, how, d = wiki_lang()
-    return 200, {"resolved": code, "how": how, "detected": d, "names": LANG_ZH}
-
-
 def api_tree(q):
     v = V.fresh()
     v.images = attachment_map()          # attachments added in Finder or Obsidian show up without a restart
@@ -1864,31 +1760,29 @@ def agent_rules():
     return allow, write, deny
 
 
+LANG_NAMES = {"en": "English", "zh-Hant": "Traditional Chinese (繁體中文)", "zh-Hans": "Simplified Chinese (简体中文)"}
+
+
 def ui_lang(tag):
-    """The interface (system) language as a LANGS code, or the raw tag for a language not in LANGS."""
+    """The interface (system) language as a BCP 47 tag; Chinese as zh-Hant or zh-Hans."""
     t = str(tag or "en").strip()
+    if not re.match(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$", t):
+        return "en"
     low = t.lower()
     if low.startswith("zh"):
         return "zh-Hans" if any(x in low for x in ("hans", "-cn", "-sg", "-my")) else "zh-Hant"
-    base = low.split("-")[0]
-    return base if base in LANGS else (t[:20] if re.match(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$", t) else "en")
+    return "en" if low.startswith("en") else t
 
 
-def lang_name(code):
-    return LANGS.get(code) or "the language of the locale '%s'" % code
+def lang_name(tag):
+    return LANG_NAMES.get(tag) or "the language of the locale '%s'" % tag
 
 
 def agent_facts(job):
     notes = wiki.RAW_REL + "/" if wiki.RAW_REL else "the whole vault except wiki/, tools/, templates/ and hidden folders"
-    wl = job.get("wiki_lang")
-    how = {"wiki": "the language the wiki's pages already use",
-           "notes": "the language most of the user's notes are in",
-           "interface": "the app's interface language; there are no notes to go by yet"}.get(job.get("wiki_lang_how"), "")
-    lang = ("Wiki language: %s (%s). Write wiki pages in it.\n" % (lang_name(wl), how) if wl else
-            "Wiki language: not set; follow the Language rules in your instructions.\n")
-    return ("Vault: %s\nThe user's notes: %s\nJournal (off limits): %s/\nToday: %s\nJev: %s\n%s"
+    return ("Vault: %s\nThe user's notes: %s\nJournal (off limits): %s/\nToday: %s\nJev: %s\n"
             "The user's language (the system language): %s; write your messages to the user (plan, report) in it.\n"
-            % (VAULT, notes, wiki.JOURNAL_REL, time.strftime("%Y-%m-%d"), "on" if job["jev"] else "off", lang,
+            % (VAULT, notes, wiki.JOURNAL_REL, time.strftime("%Y-%m-%d"), "on" if job["jev"] else "off",
                lang_name(job.get("ui_lang") or "en")))
 
 
@@ -2072,9 +1966,6 @@ def api_agent_start(body):
         label = "檢查知識庫"
     else:
         return 400, {"error": "不認得的工作"}
-    wl, how, det = wiki_lang()
-    if how == "empty":
-        wl, how = ui_lang(body.get("ui_lang")), "interface"
     model = body.get("model") if body.get("model") in MODELS else "sonnet"
     effort = body.get("effort") if body.get("effort") in EFFORTS else ("medium" if task == "analysis" else "high")
     import uuid
@@ -2084,7 +1975,7 @@ def api_agent_start(body):
         "jev": bool(body.get("jev")) and has_jev(), "session": str(uuid.uuid4()), "status": "planning",
         "steps": [], "text": "", "message": "", "plan": None, "report": "", "changes": [], "outside": [],
         "error": None, "stopped": False, "proc": None, "cost": 0.0, "denied": 0, "started": time.time(),
-        "undone": False, "vault": VAULT, "wiki_lang": wl, "wiki_lang_how": how, "ui_lang": ui_lang(body.get("ui_lang"))}
+        "undone": False, "vault": VAULT, "ui_lang": ui_lang(body.get("ui_lang"))}
     threading.Thread(target=agent_plan, args=(job,), daemon=True).start()
     return 200, {"id": jid}
 
@@ -2298,7 +2189,7 @@ def api_reveal(body):
 GET = {"/api/tree": api_tree, "/api/changes": api_changes, "/api/note": api_note, "/api/panel": api_panel,
        "/api/search": api_search, "/api/queue": api_queue, "/api/history": api_history,
        "/api/attachments": api_attachments, "/api/t2s": api_t2s, "/api/ai/poll": api_ai_poll,
-       "/api/agent/poll": api_agent_poll, "/api/agent/diff": api_agent_diff, "/api/lang": api_lang}
+       "/api/agent/poll": api_agent_poll, "/api/agent/diff": api_agent_diff}
 POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_save,
         "/api/journal": api_journal, "/api/attach": api_attach, "/api/move": api_move,
         "/api/delete": api_delete, "/api/html2note": api_html2note, "/api/restore": api_restore, "/api/import": api_import,

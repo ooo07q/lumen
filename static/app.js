@@ -1795,8 +1795,6 @@ $("#ai").addEventListener("keydown", e => {
 // Each person uses their own: their Claude subscription through Claude Code (Anthropic's own sign-in in the
 // browser; the app never sees it), their ChatGPT plan through OpenAI's "Sign in with ChatGPT", their own Jev key.
 
-let LANG_NAME = {};
-const pct = sh => Object.entries(sh || {}).filter(([, v]) => v >= 0.01).map(([k, v]) => (LANG_NAME[k] || k) + " " + Math.round(v * 100) + "%").join("、");
 
 const CN = { open: false, timer: null, models: null, jevMsg: "", codeMsg: "" };
 
@@ -1824,13 +1822,12 @@ function closeConnect() {
 async function refreshConnect() {
   clearTimeout(CN.timer);
   if (!CN.open) return;
-  let st, lang = null;
+  let st;
   try { st = await api("/api/connect/status"); } catch (e) { $("#cn-body").innerHTML = '<p class="cn-err">' + esc(e.message) + "</p>"; return; }
-  if (S.tree) { try { lang = await api("/api/lang"); } catch (e) {} }
   if (!CN.open) return;
   const keep = { key: ($("#cn-jev-key") || {}).value || "", focus: document.activeElement && document.activeElement.id };
   $("#cn-body").innerHTML = '<p class="muted cn-lead">用你自己的訂閱或金鑰。app 不經手你的帳號密碼，用量算在你自己的方案裡。至少連接 Claude 或 ChatGPT 其中一個。</p>' +
-    claudeCard(st.claude) + chatgptCard(st.chatgpt, st.chatgpt_model) + jevCard(st.jev) + (lang ? langCard(lang) : "");
+    claudeCard(st.claude) + chatgptCard(st.chatgpt, st.chatgpt_model) + jevCard(st.jev);
   if ($("#cn-jev-key")) $("#cn-jev-key").value = keep.key;
   if (keep.focus && $("#" + keep.focus)) $("#" + keep.focus).focus();
   if (st.chatgpt.welcome) gptWelcome();
@@ -1907,17 +1904,6 @@ function jevCard(j) {
     (CN.jevMsg ? '<p class="' + (CN.jevMsg.startsWith("✓") ? "muted" : "cn-err") + ' small">' + esc(CN.jevMsg) + "</p>" : "") +
     '<p class="muted small">金鑰只存在這台電腦（app 資料夾，只有你的帳號能讀）。儲存前會先試一次，確定能用。</p>';
   return card("Jev", src, j.has_key ? "on" : "off", body);
-}
-
-function langCard(l) {
-  LANG_NAME = l.names || LANG_NAME;
-  const how = { wiki: "跟著知識庫現有頁面的語言", notes: "跟著大部分筆記的語言", empty: "還沒有筆記，會用系統的語言" }[l.how] || "";
-  const res = l.resolved ? "知識庫用 <b>" + esc(LANG_NAME[l.resolved] || l.resolved) + "</b>（" + how + "）" : how;
-  const det = l.detected ? "筆記：" + (pct(l.detected.notes) || "—") + (Object.keys(l.detected.wiki || {}).length ? "；知識庫：" + pct(l.detected.wiki) : "") : "";
-  const body = '<p class="small">' + res + "</p>" + (det ? '<p class="muted small">' + esc(det) + "</p>" : "") +
-    '<p class="muted small">全部自動：知識庫已經有頁面就沿用那個語言，還是空的就用大部分筆記的語言。原文的關鍵詞和引文保留在旁邊，繁體和簡體不互轉。' +
-    "AI 跟你說話用系統的語言，問答跟著你提問的語言。</p>";
-  return card("語言", "", "", body);
 }
 
 async function gptWelcome() {
