@@ -300,7 +300,8 @@ def convert_pdfs():
 
 
 READ_BUDGET = 35000   # most tokens read in one go: a long note's skim and key parts
-READ_WHOLE = int(os.environ.get("NOTES_READ_WHOLE") or 4000)     # a note up to this is read whole (its skim would be about as long); longer: the skim first
+READ_WHOLE = int(os.environ.get("NOTES_READ_WHOLE") or 0)   # notes up to this are read whole; 0: none, every note is read
+# by its key passages (Jev, ~80% of its key points) unless the user asks for it whole (the user's rule, 2026-11-25)
 
 
 

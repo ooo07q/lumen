@@ -153,8 +153,8 @@ and updated, contradictions found, what you couldn't do, suggested next steps.
 
 Plan:
 1. Run `prep` on the note (Jev off: `outline` with `hits`). It gives the size and reading mode.
-2. Don't read a note whole unless it is short (the map says "short: read it whole") or the user asks you to.
-   For a longer note the app's `read` gives you its key passages: the paragraphs Jev rates as carrying about 80%
+2. Don't read a note whole unless the user asks you to (the task says so).
+   The app's `read` gives you a note's key passages: the paragraphs Jev rates as carrying about 80%
    of the note's key points (its central claims, findings, definitions, conclusion), with its headings; the rest
    is left out. Read the skim in prep's report first, then those passages.
    Skip references.

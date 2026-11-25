@@ -1058,8 +1058,12 @@ def key_lines(path, coverage=KEY_COVERAGE):
             break
         keep.add(pr["line"])
         got += w
+    kept = len(keep)
     keep |= {i for i, _ in heads}
-    return keep, {"paragraphs": len(paras), "kept": len(keep) - len(heads), "coverage": round(got / total, 2),
+    if lines and lines[0].strip() == "---":                    # the frontmatter: author, pages, PDF, ...
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
+        keep |= set(range(end + 1))
+    return keep, {"paragraphs": len(paras), "kept": kept, "coverage": round(got / total, 2),
                   "tokens_kept": wiki.est_tokens("\n".join(lines[i] for i in keep)),
                   "tokens": wiki.est_tokens("\n".join(lines))}
 

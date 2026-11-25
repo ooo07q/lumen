@@ -2039,7 +2039,7 @@ MODE_TEXT = {
            "page with `write`, change part of one with `edit`, add to existing pages with `cite`, take back a page you "
            "created by mistake with `remove`, and add the log entry with `log_append`.",
     "lean": "Tools in this run: none while planning. The app has gathered what you work from, below: the prep "
-            "report on the note (with Jev's skim when the note is long), the note itself (whole if short, else its "
+            "report on the note (with Jev's skim), the note itself (whole if the user asked for it, else its "
             "key passages: the paragraphs Jev rates as carrying ~80% of its key points, with its headings), and cards "
             "of the existing wiki pages most related to it (line numbers are not part of the text). Plan from these; "
             "before you write, the app hands over the whole text of every page in \"update\", and of any page you "

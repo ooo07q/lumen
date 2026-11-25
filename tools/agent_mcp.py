@@ -139,7 +139,7 @@ def t_read(a):
         # a long note: its key passages, the paragraphs Jev rates as carrying ~80% of its key points, and headings
         try:
             keep, st = jev.key_lines(full)
-            note = ("(a long note: you get its key passages — the paragraphs Jev rates as carrying %d%% of its key "
+            note = ("(you get the note's key passages — the paragraphs Jev rates as carrying %d%% of its key "
                     "points, %d of %d paragraphs — and its headings; the rest is left out)\n"
                     % (round(st["coverage"] * 100), st["kept"], st["paragraphs"]))
         except Exception as e:                       # Jev off or failing: the note as it is
