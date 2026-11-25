@@ -1839,10 +1839,18 @@ async function refreshConnect() {
   try { st = await api("/api/connect/status"); } catch (e) { $("#cn-body").innerHTML = '<p class="cn-err">' + esc(e.message) + "</p>"; return; }
   if (!CN.open) return;
   const keep = { key: ($("#cn-jev-key") || {}).value || "", focus: document.activeElement && document.activeElement.id };
-  $("#cn-body").innerHTML = '<p class="muted cn-lead">用你自己的訂閱或金鑰。app 不經手你的帳號密碼，用量算在你自己的方案裡。至少連接 Claude 或 ChatGPT 其中一個。</p>' +
-    claudeCard(st.claude) + chatgptCard(st.chatgpt) + jevCard(st.jev);
-  if ($("#cn-jev-key")) $("#cn-jev-key").value = keep.key;
-  if (keep.focus && $("#" + keep.focus)) $("#" + keep.focus).focus();
+  const html = [claudeCard(st.claude), chatgptCard(st.chatgpt), jevCard(st.jev)];
+  const body = $("#cn-body");
+  if (!body.querySelector(".cn-slot")) {
+    body.innerHTML = '<p class="muted cn-lead">用你自己的訂閱或金鑰。app 不經手你的帳號密碼，用量算在你自己的方案裡。至少連接 Claude 或 ChatGPT 其中一個。</p>' +
+      '<div class="cn-slot"></div><div class="cn-slot"></div><div class="cn-slot"></div>';
+  }
+  // only the cards that changed are redrawn: a poll while Claude installs never swallows a click elsewhere
+  body.querySelectorAll(".cn-slot").forEach((slot, i) => {
+    if (slot.dataset.html !== html[i]) { slot.innerHTML = html[i]; slot.dataset.html = html[i]; }
+  });
+  if ($("#cn-jev-key") && !$("#cn-jev-key").value) $("#cn-jev-key").value = keep.key;
+  if (keep.focus && $("#" + keep.focus) && document.activeElement.id !== keep.focus) $("#" + keep.focus).focus();
   if (st.chatgpt.welcome) gptWelcome();
   const cj = st.claude.job || {};
   if (cj.status === "running" || (cj.status === "waiting" && !st.claude.logged_in)) CN.timer = setTimeout(refreshConnect, 2000);
@@ -1881,7 +1889,7 @@ function claudeCard(c) {
     o.note = "中斷連接只是 app 不再使用 Claude，你的 Claude Code 登入不受影響。";
   } else if (installing || waiting) {
     st = "wait";
-    o.detail = installing ? "正在用 Anthropic 官方安裝程式安裝 Claude Code，大約一分鐘，裝好會直接帶你登入。"
+    o.detail = installing ? installProgress(c.install || {})
       : job.terminal ? "已經打開終端機，照視窗裡的說明在瀏覽器登入，完成後這裡會自動變成已連接。"
       : "瀏覽器會出現 Claude 的登入頁，登入並按「Authorize」，這裡會自動變成已連接。";
     o.acts = cnBtn("claude-cancel", "取消") + (waiting && !job.terminal ? cnBtn("claude-terminal", "瀏覽器沒出現？改用終端機登入") : "");
@@ -1894,6 +1902,23 @@ function claudeCard(c) {
   }
   if (job.status === "error" && job.error) o.err = esc(job.error) + (job.tail ? '<br><span class="small">' + esc(job.tail.slice(-200)) + "</span>" : "");
   return card("Claude", st, o);
+}
+
+// The official installer's progress: getting ready → downloading (bar, MB, time left) → installing → sign-in.
+function installProgress(p) {
+  const mins = s => s >= 90 ? "約 " + Math.round(s / 60) + " 分鐘" : "不到 2 分鐘";
+  let pct = 0, line;
+  if (p.phase === "setup") { pct = 100; line = "下載完成，正在安裝…"; }
+  else if (p.phase === "download" && p.pct != null) {
+    pct = p.pct;
+    line = pct + "%・" + p.mb + " / " + p.total_mb + " MB" + (p.eta != null ? "・還要" + mins(p.eta) : "");
+  } else if (p.phase === "download") line = "已下載 " + p.mb + " MB";
+  else line = "選擇最快的下載路線…";
+  const bar = '<div class="cn-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct +
+    '"' + (p.phase === "download" && p.pct == null || !p.phase || p.phase === "start" ? ' data-busy="1"' : "") +
+    '><span style="width:' + pct + '%"></span></div>';
+  return "正在用 Anthropic 官方安裝程式安裝 Claude Code，裝好會直接帶你登入。" + bar +
+    '<div class="muted small cn-progress-line">' + esc(line) + "</div>";
 }
 
 function chatgptCard(g) {
@@ -1928,10 +1953,10 @@ function jevCard(j) {
     o.acts = cnBtn("jev-remove", "中斷連接");
     o.note = j.source === "app" ? "中斷連接會刪掉 app 存的金鑰。" : "中斷連接只是 app 不再使用 Jev，你的金鑰檔案不受影響。";
   } else if (CN.jevEditing) {
-    st = "wait";
+    st = "off";                                    // nothing is running yet: it waits for the key
     o.detail = '<input id="cn-jev-key" type="password" autocomplete="off" placeholder="貼上 TypeSafe API 金鑰">';
     o.acts = cnBtn("jev-save", "儲存", true) + cnBtn("jev-cancel", "取消");
-    o.note = "儲存前會先試一次，確定能用。金鑰只存在這台電腦（只有你的帳號能讀）。";
+    o.note = "貼上金鑰後按「儲存」。儲存前會先試一次，確定能用。金鑰只存在這台電腦（只有你的帳號能讀）。";
   } else {
     st = "off";
     o.acts = cnBtn("jev-connect", "連接 Jev", true);

@@ -15,6 +15,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -78,8 +79,11 @@ def http(url, data=None, headers=None, form=False, timeout=30):
 # ------------------------------------------------------------------ Claude (through Claude Code)
 
 def claude_bin():
-    for c in (shutil.which("claude"), os.path.expanduser("~/.local/bin/claude"), "/opt/homebrew/bin/claude",
-              "/usr/local/bin/claude", os.path.expanduser("~/.claude/local/claude")):
+    places = (shutil.which("claude"), os.path.expanduser("~/.local/bin/claude"), "/opt/homebrew/bin/claude",
+              "/usr/local/bin/claude", os.path.expanduser("~/.claude/local/claude"))
+    if os.environ.get("NOTES_CLAUDE_PATHS") is not None:      # tests: only these places (a computer without Claude)
+        places = [os.path.expanduser(x) for x in os.environ["NOTES_CLAUDE_PATHS"].split(":") if x]
+    for c in places:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     return None
@@ -139,24 +143,112 @@ def claude_status():
             j["status"] = "idle"
         elif p is not None and p.poll() is not None:
             j.update({"status": "error", "error": "登入沒有完成，請再按一次。", "proc": None})
+    if j["kind"] == "install" and j["status"] == "running":
+        out["install"] = install_progress()
     out["job"] = {"kind": j["kind"], "status": j["status"], "error": j["error"], "terminal": bool(j.get("terminal")),
                   "tail": j["out"][-300:] if j["kind"] == "install" and j["status"] == "error" else ""}
     return out
+
+
+def install_progress():
+    """How far the official installer has got, for the page's progress bar. The installer downloads the binary to
+    ~/.claude/downloads/claude-<version>-<platform>; its full size is in the same release's manifest, from the same
+    Anthropic server the installer uses (read once per install). The speed is over the last ~15 seconds."""
+    j = CLAUDE_JOB
+    now = time.time()
+    p = {"phase": "start", "secs": int(now - j["started"])}
+    d = os.path.expanduser("~/.claude/downloads")
+    try:
+        files = [f for f in os.listdir(d) if re.match(r"claude-\d[\w.]*-[a-z0-9]+-[a-z0-9]+$", f)]
+    except OSError:
+        files = []
+    if not files:
+        return p
+    f = max(files, key=lambda x: os.path.getmtime(os.path.join(d, x)))
+    try:
+        got = os.path.getsize(os.path.join(d, f))
+    except OSError:
+        return p
+    if "total" not in j or j.get("total_for") != f:
+        m = re.match(r"claude-(\d[\w.]*)-([a-z0-9]+-[a-z0-9]+)$", f)
+        j["total_for"], j["total"] = f, None
+        status, r = http("https://downloads.claude.ai/claude-code-releases/%s/manifest.json" % m.group(1), timeout=10)
+        if status == 200 and isinstance(r, dict):
+            j["total"] = ((r.get("platforms") or {}).get(m.group(2)) or {}).get("size")
+    samples = [x for x in j.setdefault("samples", []) if now - x[0] <= 15] + [(now, got)]
+    j["samples"] = samples
+    speed = (samples[-1][1] - samples[0][1]) / (samples[-1][0] - samples[0][0]) if len(samples) > 1 and \
+        samples[-1][0] > samples[0][0] else 0
+    total = j.get("total")
+    p.update({"phase": "download", "mb": round(got / 1e6, 1), "total_mb": round(total / 1e6) if total else None,
+              "pct": min(100, int(got * 100 / total)) if total else None, "speed": round(speed / 1e6, 2)})
+    if total and got >= total:
+        p["phase"] = "setup"                  # downloaded: the installer checks and installs it
+    elif total and speed > 0:
+        p["eta"] = int((total - got) / speed)
+    return p
+
+
+RELEASES = "https://downloads.claude.ai/claude-code-releases"
+
+
+def _curl_home():
+    """Some networks reach Anthropic's download server far more slowly over IPv6, which curl tries first (measured on
+    one: 5 MB/s over IPv4, 0.25 MB/s over IPv6, so the 380 MB download took 25 minutes instead of 75 seconds). Before
+    installing, download from the release for 3 seconds over each and, if IPv4 is clearly faster, hand the installer a
+    curl config that prefers it (`CURL_HOME`, read by curl itself). The installer stays as published: same script,
+    same server, same checksum check. Returns the folder for CURL_HOME, or None to leave curl as it is."""
+    plat = "darwin-arm64" if os.uname().machine == "arm64" else "darwin-x64"
+    try:
+        ver = subprocess.run(["curl", "-fsSL", "-m", "10", RELEASES + "/latest"], capture_output=True, text=True,
+                             timeout=15).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if not re.match(r"^\d+\.\d+\.\d+", ver):
+        return None
+    url = "%s/%s/%s/claude" % (RELEASES, ver, plat)
+
+    def speed(flag):        # bytes in 3 seconds, one after the other: the first MB come fast on either route
+        try:
+            r = subprocess.run(["curl", flag, "-s", "-o", "/dev/null", "-r", "0-99999999", "-m", "3",
+                                "-w", "%{size_download}", url], capture_output=True, text=True, timeout=8)
+            return float(r.stdout or 0) / 3
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return 0.0
+    out = {f: speed(f) for f in ("-4", "-6")}
+    CLAUDE_JOB["route"] = {"ipv4": round(out["-4"] / 1e6, 2), "ipv6": round(out["-6"] / 1e6, 2)}
+    if out["-4"] > 1.5 * out["-6"]:
+        d = os.path.join(APP, "curl")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, ".curlrc"), "w") as f:
+            f.write("# written by the notes app: this network downloads Claude Code faster over IPv4\nipv4\n")
+        return d
+    return None
 
 
 def _install():
     """Anthropic's recommended native installer, unmodified (code.claude.com/docs/en/setup); then straight on to
     sign-in, so connecting Claude is one click."""
     j = CLAUDE_JOB
-    j.update({"kind": "install", "status": "running", "out": "", "error": None, "started": time.time()})
+    j.update({"kind": "install", "status": "running", "out": "", "error": None, "started": time.time(), "samples": []})
+    j.pop("total", None)
+    j.pop("route", None)
     try:
+        env = dict(os.environ)
+        ch = _curl_home()
+        if j["status"] != "running":              # cancelled while measuring
+            return
+        if ch:
+            env["CURL_HOME"] = ch
         p = subprocess.Popen(["/bin/bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                             start_new_session=True)
+                             start_new_session=True, env=env)
         j["proc"] = p
         for line in p.stdout:
             j["out"] += line
         p.wait()
+        if j["status"] != "running" or j.get("proc") is not p:    # cancelled (or a newer install took over)
+            return
         j["proc"] = None
         if p.returncode == 0 and claude_bin():
             j["status"] = "done"
@@ -169,7 +261,8 @@ def _install():
 
 def claude_connect():
     """The one button: install Claude Code if it isn't there, then sign in."""
-    if CLAUDE_JOB["status"] == "running":
+    p = CLAUDE_JOB.get("proc")
+    if CLAUDE_JOB["status"] == "running" or (CLAUDE_JOB["kind"] == "install" and p and p.poll() is None):
         return 409, {"error": "正在安裝 Claude Code，請稍等"}
     set_off("claude", False)
     if claude_bin() and claude_status()["logged_in"]:    # already signed in to Claude Code: just use it again
@@ -181,8 +274,10 @@ def claude_connect():
 
 
 def _stop_login():
+    if CLAUDE_JOB["kind"] != "login":          # an install's process is the installer's: claude_cancel stops that
+        return
     p = CLAUDE_JOB.get("proc")
-    if p and CLAUDE_JOB["kind"] == "login" and p.poll() is None:
+    if p and p.poll() is None:
         import signal
         try:
             os.killpg(p.pid, signal.SIGTERM)
@@ -235,15 +330,24 @@ def claude_disconnect():
 
 
 def claude_cancel():
+    """取消: stops the sign-in, or the installer with everything it started (curl, the downloaded binary's setup:
+    they share its process group)."""
     _stop_login()
     p = CLAUDE_JOB.get("proc")
-    if p:
+    CLAUDE_JOB.update({"status": "idle", "proc": None})       # first, so the install thread doesn't report an error
+    if p and p.poll() is None:
         import signal
         try:
             os.killpg(p.pid, signal.SIGTERM)
         except OSError:
             p.terminate()
-    CLAUDE_JOB.update({"status": "idle", "proc": None})
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
     return 200, {"ok": True}
 
 

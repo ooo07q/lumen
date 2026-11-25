@@ -445,6 +445,12 @@ h1.renamable:hover { background: var(--panel); }
 .cn-acts a { color: var(--accent); }
 .cn-acts a { margin-left: auto; font-size: 13px; }
 .cn-detail { margin: 6px 0; }
+.cn-progress { position: relative; height: 8px; margin: 10px 0 4px; border-radius: 4px; background: var(--code); overflow: hidden; }
+.cn-progress > span { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .8s ease; }
+.cn-progress[data-busy] > span { width: 30% !important; animation: cn-busy 1.4s ease-in-out infinite; }
+@keyframes cn-busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .cn-progress > span { transition: none; } .cn-progress[data-busy] > span { animation: none; } }
+.cn-progress-line { font-variant-numeric: tabular-nums; }
 .cn-detail input { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
 .cn-gpt { background: #000; color: #fff; border-color: #000; }
 .cn-err { color: var(--missing); }

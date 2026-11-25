@@ -47,7 +47,9 @@ ARGS = ap.parse_args()
 # ------------------------------------------------------------------ app data folder (outside any vault)
 
 def app_dir():
-    if sys.platform == "darwin":
+    if os.environ.get("NOTES_APP_DIR"):                # tests: a separate data folder
+        d = os.environ["NOTES_APP_DIR"]
+    elif sys.platform == "darwin":
         d = os.path.expanduser("~/Library/Application Support/NotesApp")
     elif os.name == "nt":
         d = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "NotesApp")
