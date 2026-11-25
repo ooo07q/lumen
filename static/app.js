@@ -1528,7 +1528,21 @@ $("#brand").addEventListener("click", async e => {
 // Claude Code, with no tools, writes the answer with [[page]] citations.
 
 const AI = { turns: [], ctx: undefined };       // ctx undefined: follow the open note; null: none
-const AI_MODELS = [["auto", "Claude：自動（Jev 選）"], ["haiku", "Claude Haiku：快、省"], ["sonnet", "Claude Sonnet：一般"], ["opus", "Claude Opus：最強、最耗額度"], ["chatgpt", "ChatGPT（你的方案）"]];
+const CLAUDE_MODELS = [["auto", "Claude：自動（Jev 選）"], ["haiku", "Claude Haiku：快、省"], ["sonnet", "Claude Sonnet：一般"], ["opus", "Claude Opus：最強、最耗額度"]];
+const GPT_TIER = { fast: "快、省", balanced: "一般", strong: "最強、最耗額度" };
+let GPT_MODELS = [];          // the models the user's ChatGPT plan offers, from its catalogue (costs no usage)
+const isGpt = m => String(m || "").startsWith("chatgpt");
+function aiModels() {
+  const gpt = [["chatgpt", "ChatGPT：自動（Jev 選）"]].concat(GPT_MODELS.map(m =>
+    ["chatgpt:" + m.slug, "ChatGPT " + m.name + "：" + GPT_TIER[m.tier] + (m.legacy ? "（舊版）" : "")]));
+  const all = CLAUDE_MODELS.concat(gpt);
+  if (!all.some(([v]) => v === aiModel()) && isGpt(aiModel())) all.push([aiModel(), "ChatGPT " + aiModel().slice(8)]);
+  return all;
+}
+async function loadGptModels() {
+  try { GPT_MODELS = (await api("/api/connect/chatgpt/models")).list || []; } catch (e) { GPT_MODELS = []; }
+  if ($("#ai-model")) renderAI();
+}
 const AI_EFFORTS = [["auto", "思考：自動"], ["low", "思考：少"], ["medium", "思考：一般"], ["high", "思考：仔細"]];
 const EFFORT_NAME = { low: "想得少", medium: "一般", high: "想得仔細" };
 function pref(k) { try { return localStorage.getItem("notesapp." + k) || "auto"; } catch (e) { return "auto"; } }
@@ -1574,10 +1588,10 @@ async function askAI(q) {
   turn.status = "asking"; renderAI();
   const history = AI.turns.filter(t => t !== turn && t.status === "done").map(t => ({ q: t.q, a: t.text }));
   try {
-    const gpt = aiModel() === "chatgpt";
+    const gpt = isGpt(aiModel());
     const a = await api("/api/ai/ask", { q, context: turn.ctx && !turn.ctx.private ? turn.ctx.path : null,
       sources: turn.sources.map(x => x.path), history, provider: gpt ? "chatgpt" : "claude",
-      model: gpt ? "auto" : aiModel(), effort: aiEffort(), jev: !!jevUsable() });
+      model: aiModel(), effort: aiEffort(), jev: !!jevUsable() });
     Object.assign(turn, { id: a.id, used: a.used, ctxUsed: a.context, choice: a.choice, status: "writing" });
   } catch (e) {
     turn.status = "error"; turn.error = e.message; renderAI();
@@ -1603,12 +1617,11 @@ const AGENT_STEPS = 6;
 async function startAgent(task, extra) {
   if (S.tree.read_only) return toast("這個筆記庫只能看，不能改。");
   showRight("ai");
-  let m = aiModel(), e = aiEffort();
-  if (m === "chatgpt") { m = "auto"; toast("整理知識庫目前用 Claude（ChatGPT 先支援問答）。"); }
+  const m = aiModel(), e = aiEffort(), gpt = isGpt(m);
   const turn = { kind: "agent", task, status: "starting", steps: [] };
   AI.turns.push(turn); renderAI();
-  const body = Object.assign({ task, model: m === "auto" ? null : m, effort: e === "auto" ? null : e, jev: !!jevUsable(),
-    ui_lang: navigator.language }, extra);
+  const body = Object.assign({ task, provider: gpt ? "chatgpt" : "claude", model: gpt ? m : m === "auto" ? null : m,
+    effort: e === "auto" ? null : e, jev: !!jevUsable(), ui_lang: navigator.language }, extra);
   try { const r = await api("/api/agent/start", body); turn.id = r.id; }
   catch (err) {
     turn.status = "error"; turn.error = err.message; renderAI();
@@ -1731,7 +1744,7 @@ function renderAI() {
     '<div class="ai-conv" id="ai-conv">' + conv + "</div>" +
     '<div class="ai-composer"><div id="ai-ctx" class="ai-ctx"></div>' +
     '<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行）"></textarea>' +
-    '<div class="ai-send-row"><select id="ai-model" title="回答用的模型">' + AI_MODELS.map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
+    '<div class="ai-send-row"><select id="ai-model" title="回答用的模型">' + aiModels().map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
     "</select>" +
     '<select id="ai-effort" title="想多深：自動＝照你在問題裡說的，或 Jev 判斷">' + AI_EFFORTS.map(([v, l]) => '<option value="' + v + '"' + (v === aiEffort() ? " selected" : "") + ">" + l + "</option>").join("") +
     '</select><button class="primary" id="ai-send">送出</button></div><div id="ai-sends" class="muted"></div></div>';
@@ -1746,7 +1759,7 @@ function updateAICtx() {
   const ctx = aiContext();
   box.innerHTML = ctx ? '<span class="chip ctx">以「' + esc(ctx.title) + "」為背景" + (ctx.private ? "（日記，不送出）" : "") + ' <button data-ctx-off title="不要用這篇當背景">×</button></span>'
     : AI.ctx === null && tab() && tab().kind === "note" ? '<button class="link-btn" data-ctx-on>＋ 用目前的筆記當背景</button>' : '<span class="muted">沒有背景筆記</span>';
-  $("#ai-sends").textContent = "會送給 Claude：問題、相關的頁" + (ctx && !ctx.private ? "、背景筆記" : "") + "、這段對話。日記不送。";
+  $("#ai-sends").textContent = "會送給 " + (isGpt(aiModel()) ? "ChatGPT" : "Claude") + "：問題、相關的頁" + (ctx && !ctx.private ? "、背景筆記" : "") + "、這段對話。日記不送。";
 }
 
 $("#ai").addEventListener("click", e => {
@@ -1834,8 +1847,10 @@ async function refreshConnect() {
   const cj = st.claude.job || {};
   if (cj.status === "running" || (cj.status === "waiting" && !st.claude.logged_in)) CN.timer = setTimeout(refreshConnect, 2000);
   // the answer box uses whichever AI is connected, without asking
-  if (st.chatgpt.connected && !st.claude.connected && aiModel() !== "chatgpt") setPref("aiModel", "chatgpt");
-  if (!st.chatgpt.connected && st.claude.connected && aiModel() === "chatgpt") setPref("aiModel", "auto");
+  if (st.chatgpt.connected && !st.claude.connected && !isGpt(aiModel())) setPref("aiModel", "chatgpt");
+  if (!st.chatgpt.connected && st.claude.connected && isGpt(aiModel())) setPref("aiModel", "auto");
+  if (st.chatgpt.connected && !GPT_MODELS.length) loadGptModels();
+  if (!st.chatgpt.connected) GPT_MODELS = [];
   if (CN.waitGpt && !st.chatgpt.connected) CN.timer = setTimeout(refreshConnect, 2000);
   if (st.chatgpt.connected) CN.waitGpt = false;
 }
@@ -1962,11 +1977,12 @@ async function connectClick(e) {
   refreshConnect();
 }
 
-// first run: nothing connected yet → show the page once
+// at start: the ChatGPT plan's models for the model menu; on the first run, nothing connected → the page once
 (async () => {
-  if (store.get("connect-seen", false)) return;
   try {
     const st = await api("/api/connect/status");
+    if (st.chatgpt.connected) loadGptModels();
+    if (store.get("connect-seen", false)) return;
     if (!(st.claude.connected || st.chatgpt.connected)) showConnect();
     store.set("connect-seen", true);
   } catch (e) {}

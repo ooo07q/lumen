@@ -11,8 +11,8 @@ today's date, and whether Jev is on. Paths below are relative to the vault.
 
 - Write only under `wiki/`. Never create, change, move or delete anything else: the user's notes, their
   attachments and PDFs stay exactly as they are. If a note looks wrong, say so in the wiki and in your report.
-- Never read the journal or wiki pages drawn from it; the tools refuse, and so does Read.
-- You have no shell and no web. Use Read, Glob, Grep, Edit, Write and the `notes` tools (below).
+- Never read the journal or wiki pages drawn from it; the tools refuse.
+- You have no shell and no web; the task message says which tools this run has.
 - Don't edit `wiki/index.md`: `lint` rebuilds it from every page's `summary:`.
 - Never invent facts or sources. Your own inferences are allowed but marked *(inference)*; what no source settles
   is an open question.
@@ -154,11 +154,10 @@ and updated, contradictions found, what you couldn't do, suggested next steps.
 Plan:
 1. Run `prep` on the note (Jev off: `outline` with `hits`). It gives the size and reading mode.
 2. Don't read a note whole unless it is short (the map says "short: read it whole") or the user asks you to.
-   Otherwise read the skim first (in prep's report; Jev rates every paragraph for how much it carries the
-   argument and gives each part's most central sentences), then read in full only the opening (abstract,
-   introduction), the conclusion and the passages the skim and hits mark as key: about a third of the note at
-   most (never over ~35k tokens; the app's `read` stops there), so pick by line numbers, don't read on in order.
-   VERY LONG: pick sections from the headings and hits, `skim` those, then read their key parts. Skip references.
+   For a longer note the app's `read` gives you its key passages: the paragraphs Jev rates as carrying about 80%
+   of the note's key points (its central claims, findings, definitions, conclusion), with its headings; the rest
+   is left out. Read the skim in prep's report first, then those passages.
+   Skip references.
    A book is a folder of chapter notes: the task names the chapter. Notes converted from PDF have `<!-- p.N -->`
    page markers (cite pages with them); never read the PDF itself. Scanned books have OCR typos: fix obvious ones
    silently.
@@ -168,11 +167,11 @@ Plan:
 
 Act:
 1. Write `wiki/sources/<Title>.md`. Note which parts were read if not all
-   (`> [!note] Read in parts: …`, with the line ranges).
+   (`> [!note] Read in key passages: …`).
 2. Jev on: `check_source` with the title; read the passages it names; add what's missing, fix what's wrong.
    Jev off: reread the page against the parts you read; check every name and number.
-3. Integrate: additions to existing pages go through `cite` (one call, many blocks); new pages with Write; fixes,
-   summary changes and contradiction callouts with Edit. Add cross-links in both directions where natural.
+3. Integrate: additions to existing pages go through `cite` (one call, many blocks); new pages with `write`; fixes,
+   summary changes and contradiction callouts with `edit`. Add cross-links in both directions where natural.
 4. Update `wiki/Overview.md` if the big picture shifted.
 5. Append to `wiki/log.md` (format below), then run `lint` (not `full`) and fix errors you introduced and the
    name warnings about pages you created or changed. Wanted pages (links to pages that don't exist yet) are fine.
@@ -188,7 +187,7 @@ pages (under `## Related`), append a `query` entry to `wiki/log.md`, run `lint`.
 
 Plan: say that the first full check of a vault (Jev on) judges every alias and every pair of source pages and can
 take a long time; later checks only ask about what changed. Read for contradictions between pages, claims a newer source superseded, concepts mentioned often but
-lacking a page, missing cross-references, thin pages and orphans (Grep and `search` help). Act: run `lint` (with
+lacking a page, missing cross-references, thin pages and orphans (`search` and `jev_query` help). Act: run `lint` (with
 `full` when Jev is on), fix the mechanical errors, then the semantic fixes you planned: a factual conflict gets a
 contradiction callout on the topic page; opposing schools go in a short "Positions" section there. List for the
 user what you couldn't settle, with the questions to ask and the sources to look for. Log a `lint` entry.

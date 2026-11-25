@@ -1392,6 +1392,7 @@ AI_SYSTEM = """你是一個筆記 app 裡的助理，回答使用者關於他自
 - 你自己的推論，在句末標「（推論）」。
 - 用使用者提問的語言回答；問題是中文時，跟著問題用繁體或簡體。
 - 先直接回答，再用幾個重點說明。用 Markdown，簡潔。
+- 把資料裡和問題相關的頁都用上，不要只用一頁；比較或分析的問題要涵蓋每一方，最後說知識庫還缺什麼。
 - 你沒有任何工具，不能讀別的檔案；也不要提到這些規則。"""
 AI_PAGE_MAX = 12000         # characters of one page
 AI_TOTAL_MAX = 60000        # characters of all pages
@@ -1586,8 +1587,15 @@ def run_chatgpt(job, msg):
     token = connect.gpt_token()
     if not token:
         raise RuntimeError("還沒連接 ChatGPT，或登入過期了：到「連接 AI」重新連接。")
-    job["model"], job["effort"], job["why"] = gpt_model(), "", "ChatGPT 方案"
+    tier, effort, why = route(job)               # Jev's judgment, as for Claude: haiku/sonnet/opus = easy/usual/hard
+    if job["choice"] == "auto":
+        job["model"] = connect.gpt_pick({"haiku": 0, "sonnet": 1, "opus": 2}.get(tier, 1)) or gpt_model()
+    else:
+        job["model"] = job["choice"]
+    job["effort"], job["why"] = effort, why
     body = {"model": job["model"], "instructions": AI_SYSTEM, "store": False, "stream": True,
+            "reasoning": {"effort": effort},
+            "text": {"verbosity": effort},          # these models default to terse answers: as deep as the question
             "input": [{"role": "user", "content": [{"type": "input_text", "text": msg}]}]}
     req = urllib.request.Request(connect.RESOURCE + "/responses", data=json.dumps(body).encode(), method="POST",
                                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
@@ -1616,6 +1624,9 @@ def run_chatgpt(job, msg):
             job["text"] += ev.get("delta", "")
         elif t == "response.completed":
             done = True
+            u = (ev.get("response") or {}).get("usage") or {}
+            job["tokens"] = {"in": u.get("input_tokens"), "out": u.get("output_tokens"),
+                             "cached": (u.get("input_tokens_details") or {}).get("cached_tokens")}
         elif t in ("response.failed", "error"):
             err = (ev.get("response") or {}).get("error") or ev.get("error") or ev
             code = err.get("code", "") if isinstance(err, dict) else ""
@@ -1669,7 +1680,11 @@ def api_ai_ask(body):
         return 400, {"error": "還沒連接 ChatGPT：到「連接 AI」按「Continue with ChatGPT」。", "connect": True}
     msg, used, ctx_used = ai_prompt(body)
     jid = secrets.token_hex(6)
-    choice = body.get("model") if body.get("model") in MODELS + ("auto",) else ai_model()
+    if provider == "chatgpt":                      # "chatgpt" (auto: Jev picks from the plan's models) or "chatgpt:<model>"
+        m = str(body.get("model") or "")
+        choice = m.split(":", 1)[1] if m.startswith("chatgpt:") else "auto"
+    else:
+        choice = body.get("model") if body.get("model") in MODELS + ("auto",) else ai_model()
     effort_choice = body.get("effort") if body.get("effort") in EFFORTS + ("auto",) else "auto"
     v = V.fresh()
     pages = [{"title": u["title"], "summary": str(v.by_rel[u["path"]].fm.get("summary", ""))[:300]} for u in used]
@@ -1689,7 +1704,8 @@ def api_ai_poll(q):
     if not job:
         return 404, {"error": "沒有這個回答"}
     return 200, {"text": job["text"], "status": job["status"], "error": job["error"], "seconds": job.get("seconds"),
-                 "model": job["model"], "effort": job["effort"], "why": job["why"], "retried": job.get("retried", 0)}
+                 "model": job["model"], "effort": job["effort"], "why": job["why"], "retried": job.get("retried", 0),
+                 "tokens": job.get("tokens")}
 
 
 def api_ai_stop(body):
@@ -1798,7 +1814,7 @@ def mcp_env(job, phase):
            "NOTES_AGENT_JEV": "1" if job["jev"] else "0", "NOTES_AGENT_TASK": job["task"],
            "NOTES_AGENT_FILES": "1" if job["mode"] == "app" else "0", "NOTES_AGENT_RUN": job["session"],
            "NOTES_AGENT_WHOLE": "1" if job.get("whole") else "0", "PYTHONIOENCODING": "utf-8"}
-    for k in ("TYPESAFE_API_KEY", "HOME", "PATH"):
+    for k in ("TYPESAFE_API_KEY", "HOME", "PATH", "NOTES_READ_WHOLE"):
         if os.environ.get(k):
             env[k] = os.environ[k]
     return env
@@ -1948,27 +1964,18 @@ def lean_context(job):
         if not err:
             parts.append("# %s for the note\n\n%s" % ("Jev's prep report" if job["jev"] else "The outline", rep_))
         # the note (api_agent_start checked it is one of the user's notes, not the journal): whole when short;
-        # else what a careful reader reads after the skim: the opening, the end and the paragraphs the skim marks
+        # else its key passages, as the agent's read tool gives them (Jev's ratings, ~80% of the key points)
         lines = open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read().split("\n")
         total = wiki.est_tokens("\n".join(lines))
         if total <= wiki.READ_WHOLE or job.get("whole"):
             note, how = "\n".join(lines), "whole"
         else:
-            keep = set(int(m.group(1)) - 1 for m in re.finditer(r"(?m)^  (\d+)  \S", rep_.split("Jev skim of", 1)[-1])
-                       ) if "Jev skim of" in rep_ else set()
-            marked, keep = sorted(keep), set()
-            budget, i = 2500, 0                   # the opening, ~2.5k tokens of body text
-            while i < len(lines) and budget > 0:
-                keep.add(i); budget -= wiki.est_tokens(lines[i]); i += 1
-            budget, i = 2000, len(lines) - 1      # the end, ~2k tokens (references are left to the map)
-            while i >= 0 and budget > 0:
-                keep.add(i); budget -= wiki.est_tokens(lines[i]); i -= 1
-            used, cap = sum(wiki.est_tokens(lines[k]) for k in keep), wiki.read_part_budget(total)
-            for k in marked:                      # then the skim's paragraphs, in order, up to the budget
-                if k not in keep and k < len(lines):
-                    if used + wiki.est_tokens(lines[k]) > cap:
-                        break
-                    keep.add(k); used += wiki.est_tokens(lines[k])
+            try:
+                keep, st = jev.key_lines(os.path.join(VAULT, rel))
+                cov = "the paragraphs Jev rates as carrying %d%% of its key points (%d of %d paragraphs) and its " \
+                      "headings" % (round(st["coverage"] * 100), st["kept"], st["paragraphs"])
+            except Exception:                     # noqa: BLE001 - Jev off or failing: the whole note
+                keep, cov = set(range(len(lines))), "the whole note (Jev couldn't pick the key passages)"
             out, last = [], -2
             for k in sorted(keep):
                 if k != last + 1:
@@ -1976,8 +1983,8 @@ def lean_context(job):
                 out.append("%6d\t%s" % (k + 1, lines[k]))
                 last = k
             note = "\n".join(out)
-            how = ("read in parts: the opening, the end and the paragraphs the skim marks as key (line-numbered); "
-                   "say so on the source page with these line ranges")
+            how = ("its key passages: %s (line-numbered); say on the source page that it was read in key passages"
+                   % cov)
         parts.append("# The note `%s` (~%d tokens; %s)\n\n%s" % (rel, total, how, note))
         body = re.sub(r"^---\n.*?\n---\n", "", open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read(), flags=re.S)
         q = "Which wiki pages cover what this note is about? %s: %s" % (os.path.basename(rel)[:-3], re.sub(r"\s+", " ", body)[:1500])
@@ -1986,27 +1993,57 @@ def lean_context(job):
         for m in re.finditer(r"(wiki/[^\n]*?\.md)", found):
             if m.group(1) not in paths:
                 paths.append(m.group(1))
-        parts.append("# Existing wiki pages most related to the note (found by the app; whole pages, line-numbered)")
+        if os.environ.get("NOTES_LEAN_WHOLE_PAGES") == "1":       # the old way, kept for comparison tests
+            parts.append("# Existing wiki pages most related to the note (found by the app; whole pages, line-numbered)")
+            for pth in paths[:10]:
+                text, err = t.call("read", {"path": pth, "lines": "1-400"})
+                if not err:
+                    parts.append("## `%s`\n\n%s" % (pth, text))
+            return "\n\n".join(parts)
+        # cards: enough to plan with; the act phase hands over the whole text of every page the plan changes
+        cards = []
         for pth in paths[:10]:
-            text, err = t.call("read", {"path": pth, "lines": "1-400"})
+            text, err = t.call("read", {"path": pth})
             if not err:
-                parts.append("## `%s`\n\n%s" % (pth, text))
+                cards.append(page_card(pth, text))
+        parts.append("# Existing wiki pages most related to the note (found by the app; cards: summary, aliases, "
+                     "sections. The act phase gives you the whole text of every page in your plan's update)\n\n"
+                     + "\n".join(cards))
         return "\n\n".join(parts)
     finally:
         t.close()
 
 
+def page_card(path, numbered):
+    """A wiki page in a few lines: its path, type, aliases, summary and section headings (from `read`'s
+    line-numbered text)."""
+    text = "\n".join(re.sub(r"^\s*\d+\t", "", l) for l in numbered.split("\n"))
+    fm = re.match(r"---\n(.*?)\n---", text, re.S)
+    meta = fm.group(1) if fm else ""
+    get = lambda k: (re.search(r"^%s:\s*(.*)$" % k, meta, re.M) or [None, ""])[1].strip().strip('"')   # noqa: E731
+    heads = [h.strip("# ").strip() for h in re.findall(r"^#{2,3} .+$", text, re.M)]
+    n = text.count("\n") + 1
+    out = "- `%s` (%s, %d lines)" % (path, get("type") or "page", n)
+    if get("aliases") not in ("", "[]"):
+        out += " aliases %s" % get("aliases")
+    out += ": %s" % get("summary")
+    if heads:
+        out += "\n  sections: " + " · ".join(heads[:20])
+    return out
+
+
 MODE_TEXT = {
+    "agent": "Tools in this run: Read, Glob, Grep, Edit, Write and the `notes` tools.",
     "app": "Tools in this run: only the `notes` tools; there is no Read, Glob, Grep, Edit or Write. Read notes and "
            "wiki pages with `read`, find pages with `search` and `jev_query`; in the act phase create or replace a "
            "page with `write`, change part of one with `edit`, add to existing pages with `cite`, take back a page you "
            "created by mistake with `remove`, and add the log entry with `log_append`.",
     "lean": "Tools in this run: none while planning. The app has gathered what you work from, below: the prep "
-            "report on the note, the note itself, and the existing wiki pages most related to it (line numbers "
-            "are not part of the text). Plan from these alone; if you'd need a page you weren't given, say so in "
-            "notes. In the act phase you get only `write` (new or whole pages), `edit` (exact text from the pages "
-            "below), `cite`, `remove` (a page you created by mistake), `log_append` (the log entry), `check_source` "
-            "and `lint`: you can't read more, so write from what is here.",
+            "report on the note (with Jev's skim when the note is long), the note itself (whole if short, else its "
+            "key passages: the paragraphs Jev rates as carrying ~80% of its key points, with its headings), and cards "
+            "of the existing wiki pages most related to it (line numbers are not part of the text). Plan from these; "
+            "before you write, the app hands over the whole text of every page in \"update\", and of any page you "
+            "list in the plan's \"read\" (paths) because you need to see it. In the act phase the app tells you how to write your changes.",
 }
 
 
@@ -2014,9 +2051,204 @@ def gpt_error(raw):
     return GPT_LIMIT if "usage_limit" in raw else "ChatGPT 回應錯誤：%s" % raw[:300]
 
 
+CHANGES_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["pages", "edits", "cite", "log", "report"],
+    "properties": {
+        "pages": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["path", "content"],
+                  "properties": {"path": {"type": "string"}, "content": {"type": "string"}}}},
+        "edits": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["path", "old", "new"],
+                  "properties": {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}}}},
+        "cite": {"type": "object", "additionalProperties": False, "required": ["source", "blocks"],
+                 "properties": {"source": {"type": "string"}, "blocks": {"type": "string"}}},
+        "log": {"type": "string"},
+        "report": {"type": "string"}}}
+
+CHANGES_TEXT = """Now write every change at once, as one JSON object (nothing else):
+- "pages": new pages, or existing pages replaced whole: {"path": "wiki/<folder>/<Title>.md", "content": the full page
+  with frontmatter}. The source page first.
+- "edits": changes inside existing pages: {"path", "old": text copied exactly from the page as given above, once in
+  it, "new": its replacement}. For fixes, summary changes, callouts, links.
+- "cite": additions to existing pages that cite the source: {"source": the source page's title, "blocks": blocks
+  each headed '=== Page Title | Section' then the text} ("" when none). Each block goes at the end of that section
+  (or a new one) and the page gets the source in sources:, ## Sources and today's updated:.
+- "log": the log entry: '## [YYYY-MM-DD] ingest | Title', then '- created: …', '- updated: …', '- notes: …' lines.
+- "report": your short report to the user (in the user's language): pages created and updated, contradictions,
+  what you couldn't do.
+The app applies these in order, then checks the source page against the note (Jev) and the wiki (lint), and shows
+you what to fix."""
+
+
+def gpt_request(job, conv, effort="medium", schema=None):
+    """One request on the user's ChatGPT plan (the Responses API; nothing stored at OpenAI). Returns the text.
+    The conversation only grows at its end and has the same cache key, so a repeated beginning is cached."""
+    import urllib.request
+    import urllib.error
+    token = connect.gpt_token()
+    if not token:
+        raise RuntimeError("還沒連接 ChatGPT，或登入過期了：到「連接 AI」重新連接。")
+    instructions = open(os.path.join(AGENT_DIR, "instructions.md"), encoding="utf-8").read()
+    body = {"model": job["model"], "instructions": instructions, "input": conv, "store": False, "stream": True,
+            "prompt_cache_key": job["session"], "reasoning": {"effort": effort}, "text": {"verbosity": "medium"}}
+    if schema:
+        body["text"]["format"] = {"type": "json_schema", "name": "changes", "schema": schema, "strict": True}
+    req = urllib.request.Request(connect.RESOURCE + "/responses", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
+                                          "Accept": "text/event-stream", "session_id": job["session"]})
+    try:
+        r = urllib.request.urlopen(req, timeout=300, context=connect._ssl())   # a stalled stream fails in 5 min
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(gpt_error(e.read().decode("utf-8", "replace")))
+    job["proc"] = r
+    text, done = "", False
+    for line in r:
+        if job["stopped"]:
+            return ""
+        line = line.decode("utf-8", "replace").strip()
+        if not line.startswith("data:"):
+            continue
+        try:
+            ev = json.loads(line[5:])
+        except ValueError:
+            continue
+        t = ev.get("type", "")
+        if t == "response.output_text.delta":
+            text += ev.get("delta", "")
+        elif t == "response.completed":
+            done = True
+            u = (ev.get("response") or {}).get("usage") or {}
+            job["tokens"]["in"] += int(u.get("input_tokens") or 0)
+            job["tokens"]["cached"] += int((u.get("input_tokens_details") or {}).get("cached_tokens") or 0)
+            job["tokens"]["out"] += int(u.get("output_tokens") or 0)
+            job["tokens"]["requests"] = job["tokens"].get("requests", 0) + 1
+            job["tokens"].setdefault("each", []).append([int(u.get("input_tokens") or 0),
+                                                         int((u.get("input_tokens_details") or {}).get("cached_tokens") or 0),
+                                                         int(u.get("output_tokens") or 0)])
+        elif t in ("response.failed", "error"):
+            raise RuntimeError(gpt_error(json.dumps(ev, ensure_ascii=False)))
+    if not done:
+        raise RuntimeError("ChatGPT 的回應中斷了，請再試一次。")
+    return text
+
+
+def gpt_lean_phase(job, phase, message):
+    """ChatGPT, lean: two or three requests for a whole ingest instead of one per step. Plan: one request with
+    the material the app gathered. Act: the app adds the pages the plan names that it hadn't handed over, asks for
+    every change in one JSON answer, applies it with its own tools, checks it (Jev, lint) and, if anything is
+    wrong, asks once for the fixes."""
+    job["status"] = "planning" if phase == "plan" else "acting"
+    job["text"] = ""
+    if phase == "plan":
+        job["conv"].append({"role": "user", "content": [{"type": "input_text", "text": message}]})
+        job["steps"].append({"phase": "plan", "what": "ChatGPT 讀交給它的資料、列計畫", "ok": None})
+        text = gpt_request(job, job["conv"], "medium")
+        job["steps"][-1]["ok"] = bool(text)
+        job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": text}]})
+        job["text"] = text
+        return
+    t = NotesTools(dict(mcp_env(job, "act"), NOTES_AGENT_FILES="1"))
+    try:
+        # the pages the plan will change or asks to read, that weren't in the material: read them now
+        given = set(re.findall(r"## `(wiki/[^`]+\.md)`", json.dumps(job["conv"][0], ensure_ascii=False)))
+        plan = job.get("plan") or {}
+        v = V.fresh()
+        want = [str(x) for x in plan.get("read") or []]
+        for u in plan.get("update") or []:
+            p = next((q for q in v.pages if q.name == str(u.get("page") or "") and q.name in v.sendable), None)
+            if p:
+                want.append(p.rel)
+        more = []
+        for rel in dict.fromkeys(want):
+            if rel.startswith("wiki/") and rel not in given and len(more) < 12:
+                txt, err = t.call("read", {"path": rel, "lines": "1-600"})
+                if not err:
+                    more.append("## `%s`\n\n%s" % (rel, txt))
+                    job["steps"].append({"phase": "act", "what": "讀 " + rel, "ok": True})
+        msg = message + ("\n\n# More pages (the ones the plan names that you hadn't been given)\n\n" + "\n\n".join(more)
+                         if more else "") + "\n\n" + CHANGES_TEXT
+        job["conv"].append({"role": "user", "content": [{"type": "input_text", "text": msg}]})
+        report = []
+        for attempt in range(2):
+            job["steps"].append({"phase": "act", "what": "ChatGPT 寫出全部修改" if attempt == 0 else "ChatGPT 修正", "ok": None})
+            out = gpt_request(job, job["conv"], "medium", CHANGES_SCHEMA)
+            job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": out}]})
+            try:
+                ch = json.loads(out)
+            except ValueError:
+                job["steps"][-1]["ok"] = False
+                raise RuntimeError("ChatGPT 的回覆不是可用的修改清單。")
+            job["steps"][-1]["ok"] = True
+            if ch.get("report"):
+                report.append(ch["report"])
+            problems, touched, source = [], set(), None
+            pages = sorted(ch.get("pages") or [], key=lambda x: not str(x.get("path", "")).startswith("wiki/sources/"))
+            for pg in pages:
+                r, err = t.call("write", {"path": pg.get("path"), "content": pg.get("content")})
+                job["steps"].append({"phase": "act", "what": "寫 " + str(pg.get("path")), "ok": not err})
+                if err:
+                    problems.append("write %s: %s" % (pg.get("path"), r))
+                else:
+                    touched.add(pg["path"])
+                    if pg["path"].startswith("wiki/sources/") and not source:
+                        source = os.path.basename(pg["path"])[:-3]
+            for ed in ch.get("edits") or []:
+                r, err = t.call("edit", {"path": ed.get("path"), "old": ed.get("old"), "new": ed.get("new")})
+                job["steps"].append({"phase": "act", "what": "改 " + str(ed.get("path")), "ok": not err})
+                if err:
+                    problems.append("edit %s: %s" % (ed.get("path"), r))
+                else:
+                    touched.add(ed["path"])
+            c = ch.get("cite") or {}
+            if str(c.get("blocks") or "").strip():
+                r, err = t.call("cite", {"blocks": c["blocks"], "source": c.get("source") or source or ""})
+                job["steps"].append({"phase": "act", "what": "cite " + str(c.get("source") or ""), "ok": not err})
+                if err or "not found" in r.lower() or "no such" in r.lower():
+                    problems.append("cite: " + r[-1500:])
+            if attempt == 0 and str(ch.get("log") or "").strip():
+                r, err = t.call("log_append", {"entry": ch["log"]})
+                job["steps"].append({"phase": "act", "what": "log", "ok": not err})
+                if err:
+                    problems.append("log: " + r)
+            # the app's checks: Jev's check of the source page, and lint
+            if source and job["jev"] and attempt == 0:
+                r, err = t.call("check_source", {"title": source})
+                job["steps"].append({"phase": "act", "what": "check_source " + source, "ok": not err})
+                if not err and re.search(r"(?i)main point|not (backed|supported)|mismatch", r):
+                    problems.append("Jev's check of the source page (fix what is really missing or wrong; it is "
+                                    "a filter, not a verdict):\n" + r[-6000:])
+            r, err = t.call("lint", {})
+            job["steps"].append({"phase": "act", "what": "lint", "ok": not err})
+            mine = [l for l in r.split("\n") if any(os.path.basename(x)[:-3] in l for x in touched) and
+                    re.search(r"(?i)error|broken|invalid|duplicate|alias", l)]
+            if mine:
+                problems.append("lint, about pages you wrote:\n" + "\n".join(mine[:40]))
+            if not problems or attempt == 1:
+                if problems:
+                    report.append("（還有沒修好的：" + "；".join(p.split("\n")[0] for p in problems)[:600] + "）")
+                break
+            cur = []
+            for rel in sorted(touched):
+                txt, err = t.call("read", {"path": rel})
+                if not err:
+                    cur.append("## `%s` (as it is now)\n\n%s" % (rel, txt))
+            job["conv"].append({"role": "user", "content": [{"type": "input_text", "text":
+                "The app applied your changes. These need fixing:\n\n" + "\n\n".join(problems) +
+                "\n\nThe pages you wrote or changed, as they are now (line numbers are not part of the text):\n\n" +
+                "\n\n".join(cur) + "\n\nAnswer with the same JSON: only the fixes (edits against the text above, "
+                "or pages to write whole; \"cite\" with empty blocks and \"log\" empty unless needed)."}]})
+        job["text"] = "\n\n".join(report)
+    finally:
+        t.close()
+
+
 def run_gpt_agent_phase(job, phase, message):
     """One phase on the user's ChatGPT plan: the Responses API (nothing stored at OpenAI); every tool call is
     one of the app's tools, run here by the app."""
+    if job["mode"] == "lean":
+        try:
+            return gpt_lean_phase(job, phase, message)
+        except Exception as e:                    # noqa: BLE001 - shown to the user
+            job["error"] = str(e)
+            return
     import urllib.request
     import urllib.error
     job["status"] = "planning" if phase == "plan" else "acting"
@@ -2205,16 +2437,19 @@ def api_agent_start(body):
         label = "檢查知識庫"
     else:
         return 400, {"error": "不認得的工作"}
-    mode = body.get("mode") if body.get("mode") in ("agent", "app", "lean") else "agent"
+    # Claude works with the app's tools only; ChatGPT gets the material handed over (fewest requests: its plan
+    # usage counts every request's whole input)
+    mode = body.get("mode") if body.get("mode") in ("agent", "app", "lean") else (
+        "lean" if provider == "chatgpt" else "app")
     if provider == "chatgpt" and mode == "agent":
-        mode = "app"                              # ChatGPT has no file tools of its own: always the app's
+        mode = "lean"
     if mode == "lean" and task != "ingest":
         mode = "app"
-    if provider == "chatgpt":
-        try:
-            model = gpt_model()
-        except RuntimeError as e:
-            return 400, {"error": str(e)}
+    if provider == "chatgpt":                      # the model the user picked, else the plan's default
+        m = str(body.get("model") or "")
+        model = m.split(":", 1)[1] if m.startswith("chatgpt:") else connect.gpt_pick(1)
+        if not model:
+            return 400, {"error": "ChatGPT 沒有列出可用的模型"}
     else:
         model = body.get("model") if body.get("model") in MODELS else "sonnet"
     effort = body.get("effort") if body.get("effort") in EFFORTS else ("medium" if task == "analysis" else "high")

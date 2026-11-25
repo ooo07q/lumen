@@ -300,13 +300,8 @@ def convert_pdfs():
 
 
 READ_BUDGET = 35000   # most tokens read in one go: a long note's skim and key parts
-READ_WHOLE = 4000     # a note up to this is read whole (its skim would be about as long); longer: the skim first
+READ_WHOLE = int(os.environ.get("NOTES_READ_WHOLE") or 4000)     # a note up to this is read whole (its skim would be about as long); longer: the skim first
 
-
-def read_part_budget(total):
-    """Tokens of a longer note read in full after its skim (opening, end, key passages): about a third of it,
-    at least READ_WHOLE, at most READ_BUDGET. The whole note only when the user asks."""
-    return int(min(max(total / 3, READ_WHOLE), READ_BUDGET))
 
 
 def est_tokens(text):

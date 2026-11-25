@@ -437,8 +437,26 @@ def gpt_status():
     return out
 
 
+MODEL_CACHE = {"at": 0, "rows": None}
+
+
+def model_tier(desc):
+    """fast | balanced | strong, from OpenAI's own description of the model in the account's catalogue."""
+    d = (desc or "").lower()
+    if any(w in d for w in ("fast", "affordable", "simple", "easier", "mini", "lightweight")):
+        return "fast"
+    if any(w in d for w in ("balanced", "general", "everyday")):
+        return "balanced"
+    if any(w in d for w in ("frontier", "most capable", "flagship", "strongest", "complex", "deep", "advanced",
+                            "powerful", "best")):
+        return "strong"
+    return "balanced"
+
+
 def gpt_models():
-    """Check the connection without spending plan usage: the account's model catalogue."""
+    """The models the user's plan offers (its catalogue costs no plan usage), each with a tier."""
+    if MODEL_CACHE["rows"] is not None and time.time() - MODEL_CACHE["at"] < 600:
+        return 200, {"models": [m["slug"] for m in MODEL_CACHE["rows"]], "list": MODEL_CACHE["rows"]}
     t = gpt_token()
     if not t:
         return 400, {"error": "還沒連接 ChatGPT，或登入過期了"}
@@ -446,8 +464,33 @@ def gpt_models():
     if status != 200 or not isinstance(r, dict):
         return 502, {"error": "OpenAI 回應 %s：%s" % (status, str(r)[:200])}
     rows = r.get("models") or r.get("data") or []          # the catalogue comes as {"models": [...]}
-    models = [m.get("slug") or m.get("id") for m in rows if m.get("visibility", "list") == "list"]
-    return 200, {"models": [m for m in models if m]}
+    out = []
+    for m in sorted(rows, key=lambda m: m.get("priority") or 99):
+        slug = m.get("slug") or m.get("id")
+        if not slug or m.get("visibility", "list") != "list":
+            continue
+        desc = m.get("description") or ""
+        out.append({"slug": slug, "name": m.get("display_name") or slug, "tier": model_tier(desc),
+                    "legacy": "legacy" in desc.lower(), "description": desc})
+    MODEL_CACHE.update(at=time.time(), rows=out)
+    return 200, {"models": [m["slug"] for m in out], "list": out}
+
+
+def gpt_pick(level):
+    """A model for a question of this level (0 easy … 2 hard): the plan's own default for most, its fastest for
+    easy ones, its strongest for hard ones; newer before legacy."""
+    code, r = gpt_models()
+    rows = r.get("list") or [] if code == 200 else []
+    if not rows:
+        return None
+    rank = {"fast": 0, "balanced": 1, "strong": 2}
+    if level <= 0:
+        cands = sorted(rows, key=lambda m: (rank[m["tier"]], m["legacy"]))
+    elif level >= 2:
+        cands = sorted(rows, key=lambda m: (-rank[m["tier"]], m["legacy"]))
+    else:
+        cands = [m for m in rows if not m["legacy"]] or rows               # the catalogue's first: OpenAI's default
+    return cands[0]["slug"]
 
 
 def gpt_welcomed():

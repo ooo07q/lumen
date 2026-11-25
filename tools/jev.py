@@ -31,6 +31,7 @@ to read the text and decide. Jev is paid per input token (~$0.04 per million), s
 Key: TYPESAFE_API_KEY or ~/.config/typesafe/api_key. Stdlib only, run from the vault root.
 """
 import argparse
+import hashlib
 import itertools
 import json
 import os
@@ -973,6 +974,96 @@ SKIM_Q = S("How much does this paragraph (`paragraph`, from the note `note`, sec
 SKIM_PICK = "Which sentence of the paragraph best states its main point?"
 
 
+KEY_COVERAGE = 0.8      # a long note is read as the paragraphs carrying ~80% of its key points (Jev's ratings)
+def ratings_file():
+    return os.path.join(wiki.DATA, "skim_ratings.json")       # wiki.DATA follows the open vault
+
+
+def note_paragraphs(lines, ranges=None):
+    """The note's paragraphs (body text, references and appendices left out) and headings, as skim sees them."""
+    _, _, _, _, _, rngs = wiki.reading_ranges(lines, ranges)
+    segs = wiki.segments(lines, rngs)
+    paras, heads = [], []
+    for k, sg in enumerate(segs):
+        section = sg["label"]
+        for i in range(sg["start"], sg["end"]):
+            ln = lines[i].strip()
+            if wiki.HEAD.match(ln):
+                section = re.sub(r"[#*_`]", "", ln).strip()[:100]
+                heads.append((i, section))
+                continue
+            if not ln or wiki.SKIP_BLOCK.match(ln):
+                continue
+            sents = [x.strip() for x in wiki.SENTENCE.split(ln) if len(set(wiki.content_units(x))) >= 3][:12]
+            if sents:
+                paras.append({"seg": k, "line": i, "section": section, "text": ln, "sents": sents})
+    return paras, heads, segs, rngs
+
+
+def rate_paragraphs(path, paras, title):
+    """Jev's rating of each paragraph (0 filler … 3 central, as an expected value) and its main sentence; kept in
+    the data folder per note and paragraph text, so prep's skim and the agent's reading share one set of answers."""
+    rel = os.path.relpath(path, wiki.VAULT)
+    try:
+        cache = json.load(open(ratings_file(), encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    mine = cache.get(rel, {})
+    key = lambda pr: hashlib.sha1(pr["text"].encode("utf-8")).hexdigest()[:16]          # noqa: E731
+    todo = [pr for pr in paras if key(pr) not in mine]
+
+    def ask_one(pr):
+        q = {"importance": SKIM_Q}
+        if len(pr["sents"]) > 1:
+            q["pick"] = C(SKIM_PICK, {str(j): x[:400] for j, x in enumerate(pr["sents"])})
+        a = ask({"note": title, "section": pr["section"], "paragraph": pr["text"][:3000]}, q)
+        probs = {int(k): float(v) for k, v in a["importance"]["probabilities"].items()}
+        best = int(a["pick"]["choice"]) if len(pr["sents"]) > 1 else 0
+        return sum(k * v for k, v in probs.items()), best
+    if todo:
+        with ThreadPoolExecutor(12) as ex:
+            for pr, (ev, best) in zip(todo, ex.map(ask_one, todo)):
+                mine[key(pr)] = [round(ev, 3), best]
+        try:
+            cache = json.load(open(ratings_file(), encoding="utf-8"))
+        except (OSError, ValueError):
+            cache = {}
+        cache[rel] = mine
+        tmp = "%s.%d.tmp" % (ratings_file(), os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+        os.replace(tmp, ratings_file())
+    return [(mine[key(pr)][0], pr["sents"][min(mine[key(pr)][1], len(pr["sents"]) - 1)]) for pr in paras]
+
+
+def key_lines(path, coverage=KEY_COVERAGE):
+    """The lines (0-based) of a note's key passages: its paragraphs from the most central down until they carry
+    `coverage` of the note's key-point weight (a paragraph weighs what Jev rates it above "background": 0 for
+    filler and background, 1 for a substantive claim, 2 for a central one), plus its headings. Length plays no
+    part. Returns (lines, stats)."""
+    lines = read(path).split("\n")
+    fm, _, _ = wiki.parse_frontmatter("\n".join(lines))
+    title = str(fm.get("title") or os.path.splitext(os.path.basename(path))[0])
+    paras, heads, _, _ = note_paragraphs(lines)
+    rated = rate_paragraphs(path, paras, title)
+    weight = [max(ev - 1, 0) for ev, _ in rated]
+    if sum(weight) < 0.5:              # Jev finds no substantive paragraph: nothing to choose by, the note as it is
+        return set(range(len(lines))), {"paragraphs": len(paras), "kept": len(paras), "coverage": 1.0,
+                                        "tokens_kept": wiki.est_tokens("\n".join(lines)),
+                                        "tokens": wiki.est_tokens("\n".join(lines))}
+    total = sum(weight)
+    keep, got = set(), 0.0
+    for w, pr in sorted(zip(weight, paras), key=lambda x: -x[0]):
+        if got >= coverage * total or w <= 0:
+            break
+        keep.add(pr["line"])
+        got += w
+    keep |= {i for i, _ in heads}
+    return keep, {"paragraphs": len(paras), "kept": len(keep) - len(heads), "coverage": round(got / total, 2),
+                  "tokens_kept": wiki.est_tokens("\n".join(lines[i] for i in keep)),
+                  "tokens": wiki.est_tokens("\n".join(lines))}
+
+
 def cmd_skim(args):
     """outline --skim with Jev choosing: each paragraph rated for how much it carries the note's argument, its
     main sentence picked; per part, the best paragraphs' sentences up to ~SKIM_RATIO of the part.
@@ -982,37 +1073,12 @@ def cmd_skim(args):
     lines = read(path).split("\n")
     fm, _, _ = wiki.parse_frontmatter("\n".join(lines))
     title = str(fm.get("title") or os.path.splitext(os.path.basename(path))[0])
-    _, _, _, _, _, ranges = wiki.reading_ranges(lines, args.lines)
-    segs = wiki.segments(lines, ranges)
-    paras, heads = [], []
-    for k, sg in enumerate(segs):
-        section = sg["label"]
-        for i in range(sg["start"], sg["end"]):
-            ln = lines[i].strip()
-            if wiki.HEAD.match(ln):
-                section = re.sub(r"[#*_`]", "", ln).strip()[:100]
-                heads.append((i, "%d %s" % (i + 1, section[:120])))
-                continue
-            if not ln or wiki.SKIP_BLOCK.match(ln):
-                continue
-            sents = [x.strip() for x in wiki.SENTENCE.split(ln) if len(set(wiki.content_units(x))) >= 3][:12]
-            if sents:
-                paras.append({"seg": k, "line": i, "section": section, "text": ln, "sents": sents})
+    paras, heads0, segs, ranges = note_paragraphs(lines, args.lines)
+    heads = [(i, "%d %s" % (i + 1, sec[:120])) for i, sec in heads0]
     print("%s: %d paragraphs in %d parts; asking Jev…" % (rel, len(paras), len(segs)), file=sys.stderr)
-
-    def ask_one(pr):
-        q = {"importance": SKIM_Q}
-        if len(pr["sents"]) > 1:
-            q["pick"] = C(SKIM_PICK, {str(j): x[:400] for j, x in enumerate(pr["sents"])})
-        a = ask({"note": title, "section": pr["section"], "paragraph": pr["text"][:3000]}, q)
-        probs = {int(k): float(v) for k, v in a["importance"]["probabilities"].items()}
-        best = pr["sents"][int(a["pick"]["choice"])] if len(pr["sents"]) > 1 else pr["sents"][0]
-        return sum(k * v for k, v in probs.items()), best
-
     t0 = time.time()
     try:
-        with ThreadPoolExecutor(12) as ex:
-            res = list(ex.map(ask_one, paras))
+        res = rate_paragraphs(path, paras, title)
     except Exception as e:
         sys.exit("jev skim FAILED: %s\nUse `python3 tools/wiki.py outline %s --skim` instead and say so in the report."
                  % (e, rel))
