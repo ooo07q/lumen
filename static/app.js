@@ -24,7 +24,7 @@ async function api(path, body) {
   const j = await r.json().catch(() => ({ error: "bad response" }));
   if (r.status === 401 && j.nokey) showStart("nokey");
   else if (r.status === 409 && j.novault) showStart();
-  if (!r.ok) throw new Error(j.error || r.status);
+  if (!r.ok) { const e = new Error(j.error || r.status); e.data = j; throw e; }
   return j;
 }
 
@@ -1515,7 +1515,8 @@ $("#brand").addEventListener("click", async e => {
   const r = $("#brand").getBoundingClientRect();
   const items = v.vaults.filter(x => x.exists).slice(0, 8).map(x => ({ label: (x.path === v.current ? "✓ " : "　 ") + x.name, fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
   items.push(null, { label: "打開其他資料夾…", fn: () => showStart("open") }, { label: "建立新的筆記庫…", fn: () => showStart("create") },
-    { label: "管理清單…", fn: () => showStart() }, null, { label: "✦ 請 AI 檢查知識庫…", fn: () => startAgent("lint", {}) },
+    { label: "管理清單…", fn: () => showStart() }, null, { label: "✦ 連接 AI 與語言…", fn: () => showConnect() },
+    { label: "✦ 請 AI 檢查知識庫…", fn: () => startAgent("lint", {}) },
     { label: "在 Finder 中顯示", fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) });
   showMenu(r.left, r.bottom + 4, items);
 });
@@ -1527,7 +1528,7 @@ $("#brand").addEventListener("click", async e => {
 // Claude Code, with no tools, writes the answer with [[page]] citations.
 
 const AI = { turns: [], ctx: undefined };       // ctx undefined: follow the open note; null: none
-const AI_MODELS = [["auto", "自動（Jev 選）"], ["haiku", "Haiku：快、省"], ["sonnet", "Sonnet：一般"], ["opus", "Opus：最強、最耗額度"]];
+const AI_MODELS = [["auto", "Claude：自動（Jev 選）"], ["haiku", "Claude Haiku：快、省"], ["sonnet", "Claude Sonnet：一般"], ["opus", "Claude Opus：最強、最耗額度"], ["chatgpt", "ChatGPT（你的方案）"]];
 const AI_EFFORTS = [["auto", "思考：自動"], ["low", "思考：少"], ["medium", "思考：一般"], ["high", "思考：仔細"]];
 const EFFORT_NAME = { low: "想得少", medium: "一般", high: "想得仔細" };
 function pref(k) { try { return localStorage.getItem("notesapp." + k) || "auto"; } catch (e) { return "auto"; } }
@@ -1573,10 +1574,16 @@ async function askAI(q) {
   turn.status = "asking"; renderAI();
   const history = AI.turns.filter(t => t !== turn && t.status === "done").map(t => ({ q: t.q, a: t.text }));
   try {
+    const gpt = aiModel() === "chatgpt";
     const a = await api("/api/ai/ask", { q, context: turn.ctx && !turn.ctx.private ? turn.ctx.path : null,
-      sources: turn.sources.map(x => x.path), history, model: aiModel(), effort: aiEffort(), jev: !!jevUsable() });
+      sources: turn.sources.map(x => x.path), history, provider: gpt ? "chatgpt" : "claude",
+      model: gpt ? "auto" : aiModel(), effort: aiEffort(), jev: !!jevUsable() });
     Object.assign(turn, { id: a.id, used: a.used, ctxUsed: a.context, choice: a.choice, status: "writing" });
-  } catch (e) { turn.status = "error"; turn.error = e.message; renderAI(); return; }
+  } catch (e) {
+    turn.status = "error"; turn.error = e.message; renderAI();
+    if (e.data && e.data.connect) showConnect();
+    return;
+  }
   renderAI();
   while (turn.status === "writing") {
     await new Promise(res => setTimeout(res, 250));
@@ -1596,13 +1603,25 @@ const AGENT_STEPS = 6;
 async function startAgent(task, extra) {
   if (S.tree.read_only) return toast("這個筆記庫只能看，不能改。");
   showRight("ai");
-  const m = aiModel(), e = aiEffort();
+  let m = aiModel(), e = aiEffort();
+  if (m === "chatgpt") { m = "auto"; toast("整理知識庫目前用 Claude（ChatGPT 先支援問答）。"); }
   const turn = { kind: "agent", task, status: "starting", steps: [] };
   AI.turns.push(turn); renderAI();
-  try {
-    const r = await api("/api/agent/start", Object.assign({ task, model: m === "auto" ? null : m, effort: e === "auto" ? null : e, jev: !!jevUsable() }, extra));
-    turn.id = r.id;
-  } catch (err) { turn.status = "error"; turn.error = err.message; renderAI(); return; }
+  const body = Object.assign({ task, model: m === "auto" ? null : m, effort: e === "auto" ? null : e, jev: !!jevUsable(),
+    ui_lang: navigator.language }, extra);
+  for (;;) {
+    try { const r = await api("/api/agent/start", body); turn.id = r.id; break; }
+    catch (err) {
+      if (err.data && err.data.need_lang && !body.lang) {          // notes in several languages: ask once
+        const lang = await askWikiLang(err.data.need_lang, err.data.choices);
+        if (lang) { body.lang = lang; continue; }
+        AI.turns.splice(AI.turns.indexOf(turn), 1); renderAI(); return;
+      }
+      turn.status = "error"; turn.error = err.message; renderAI();
+      if (err.data && err.data.connect) showConnect();
+      return;
+    }
+  }
   pollAgent(turn);
 }
 async function pollAgent(turn) {
@@ -1777,3 +1796,183 @@ $("#ai").addEventListener("keydown", e => {
   if (e.target.id !== "ai-input" || e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
   e.preventDefault(); askAI(e.target.value);
 });
+
+
+// ============================================================ connect AI (Claude, ChatGPT, Jev) and the wiki's language
+// Each person uses their own: their Claude subscription through Claude Code (Anthropic's own sign-in in the
+// browser; the app never sees it), their ChatGPT plan through OpenAI's "Sign in with ChatGPT", their own Jev key.
+
+const LANG_NAME = { en: "英文", "zh-Hant": "繁體中文", "zh-Hans": "簡體中文" };
+const pct = sh => Object.entries(sh || {}).filter(([, v]) => v >= 0.01).map(([k, v]) => (LANG_NAME[k] || k) + " " + Math.round(v * 100) + "%").join("、");
+
+async function askWikiLang(shares, choices) {
+  const opts = Object.entries(choices).map(([k, l], i) => '<label class="cn-radio"><input type="radio" name="wl" value="' + k + '"' +
+    (i === 0 ? "" : "") + (k === Object.keys(shares)[0] ? " checked" : "") + "> " + esc(l) + "</label>").join("");
+  const ok = await dialog("知識庫要用哪種語言寫？", "<p>你的筆記混用了幾種語言（" + esc(pct(shares)) + "）。AI 整理出來的知識庫頁面要統一用一種語言寫，" +
+    "原文的關鍵詞和引文會保留在旁邊。之後可以在「連接 AI 與語言」裡改。</p>" + opts, "用這個語言");
+  if (!ok) return null;
+  const c = document.querySelector('input[name="wl"]:checked');
+  return c ? c.value : null;
+}
+
+const CN = { open: false, timer: null, models: null, jevMsg: "", codeMsg: "" };
+
+function showConnect() {
+  let el = $("#connect");
+  if (!el) {
+    el = document.createElement("div"); el.id = "connect"; el.className = "cn-back";
+    el.innerHTML = '<div class="cn" role="dialog" aria-modal="true" aria-label="連接 AI"><div class="cn-head"><h2>連接 AI</h2>' +
+      '<button class="ghost" data-cn-close title="關閉">✕</button></div><div id="cn-body"><p class="muted">檢查中…</p></div></div>';
+    document.body.append(el);
+    el.addEventListener("click", connectClick);
+    el.addEventListener("keydown", e => {
+      if (e.key === "Escape") closeConnect();
+      if (e.key === "Enter" && e.target.id === "cn-jev-key") connectClick({ target: $("[data-cn=jev-save]") });
+    });
+  }
+  el.hidden = false; CN.open = true;
+  refreshConnect();
+}
+function closeConnect() {
+  const el = $("#connect"); if (el) el.hidden = true;
+  CN.open = false; clearTimeout(CN.timer);
+}
+
+async function refreshConnect() {
+  clearTimeout(CN.timer);
+  if (!CN.open) return;
+  let st, lang = null;
+  try { st = await api("/api/connect/status"); } catch (e) { $("#cn-body").innerHTML = '<p class="cn-err">' + esc(e.message) + "</p>"; return; }
+  if (S.tree) { try { lang = await api("/api/lang"); } catch (e) {} }
+  if (!CN.open) return;
+  const keep = { key: ($("#cn-jev-key") || {}).value || "", focus: document.activeElement && document.activeElement.id };
+  $("#cn-body").innerHTML = '<p class="muted cn-lead">用你自己的訂閱或金鑰。app 不經手你的帳號密碼，用量算在你自己的方案裡。至少連接 Claude 或 ChatGPT 其中一個。</p>' +
+    claudeCard(st.claude) + chatgptCard(st.chatgpt, st.chatgpt_model) + jevCard(st.jev) + (lang ? langCard(lang) : "");
+  if ($("#cn-jev-key")) $("#cn-jev-key").value = keep.key;
+  if (keep.focus && $("#" + keep.focus)) $("#" + keep.focus).focus();
+  if (st.chatgpt.welcome) gptWelcome();
+  const cj = st.claude.job || {};
+  if (cj.status === "running" || (cj.status === "waiting" && !st.claude.logged_in)) CN.timer = setTimeout(refreshConnect, 2000);
+  // the answer box uses whichever AI is connected, without asking
+  if (st.chatgpt.connected && !st.claude.logged_in && aiModel() !== "chatgpt") setPref("aiModel", "chatgpt");
+  if (!st.chatgpt.connected && st.claude.logged_in && aiModel() === "chatgpt") setPref("aiModel", "auto");
+  if (CN.waitGpt && !st.chatgpt.connected) CN.timer = setTimeout(refreshConnect, 2000);
+  if (st.chatgpt.connected) CN.waitGpt = false;
+}
+
+function card(name, state, cls, body) {
+  return '<section class="cn-card"><div class="cn-row"><h3>' + name + '</h3><span class="cn-state ' + cls + '">' + state + "</span></div>" + body + "</section>";
+}
+
+function claudeCard(c) {
+  const job = c.job || {};
+  const installing = job.kind === "install" && job.status === "running";
+  const waiting = job.kind === "login" && job.status === "waiting";
+  let state, cls, body;
+  if (c.logged_in) {
+    const plan = c.subscription ? (c.plan ? cap(c.plan) + " 訂閱" : "訂閱") : c.method === "api_key" ? "API 金鑰（按用量計費）" : (c.method || "");
+    state = "已連接"; cls = "on";
+    body = "<p>使用你的 Claude " + esc(plan) + "。" + (c.expires ? '<span class="muted">登入到 ' + esc(String(c.expires).slice(0, 10)) + " 前有效。</span>" : "") + "</p>" +
+      (waiting || job.status === "done" ? '<p class="muted small">終端機視窗可以關掉了。</p>' : "") +
+      (c.subscription ? "" : '<p class="muted small">這不是訂閱登入，用量會按 API 計費。</p>');
+  } else if (installing) {
+    state = "安裝中…"; cls = "wait";
+    body = '<p>正在用 Anthropic 官方安裝程式安裝 Claude Code，大約一分鐘。裝好會直接帶你登入。</p>';
+  } else if (waiting) {
+    state = "等你登入…"; cls = "wait";
+    body = "<p>已經打開終端機，瀏覽器會出現 Claude 的登入頁。登入並按「Authorize」，這裡會自動變成已連接。</p>" +
+      '<p class="muted small">瀏覽器沒出現？看終端機視窗裡的說明。登入完全在 Anthropic 的流程裡完成，app 不會經手。</p>' +
+      '<div class="cn-acts"><button class="ghost" data-cn="claude-connect">再開一次</button></div>';
+  } else {
+    state = c.installed ? "還沒登入" : "還沒安裝"; cls = "off";
+    body = "<p>用你的 Claude 訂閱（Pro、Max）回答問題、整理知識庫。</p>" +
+      '<div class="cn-acts"><button class="primary" data-cn="claude-connect">連接 Claude</button></div>' +
+      '<p class="muted small">' + (c.installed ? "" : "會先用 Anthropic 官方安裝程式裝好 Claude Code（不用管理員密碼），") +
+      "接著打開終端機和瀏覽器，讓你在 Claude 的網頁登入。app 不會看到你的帳號資料。</p>";
+  }
+  if (job.status === "error" && job.error) body += '<p class="cn-err">' + esc(job.error) + (job.tail ? '<br><span class="small">' + esc(job.tail.slice(-200)) + "</span>" : "") + "</p>";
+  return card("Claude", state, cls, body);
+}
+
+function chatgptCard(g, model) {
+  let body;
+  if (!g.connected) {
+    body = '<p>用你的 ChatGPT 方案（Plus、Pro 等）回答問題。</p><div class="cn-acts"><button class="primary cn-gpt" data-cn="gpt-start">Continue with ChatGPT</button></div>' +
+      '<p class="muted small">在 OpenAI 的網頁同意之後就連上了。用量算在你的 ChatGPT 方案裡，和你在其他 app 的用量共用同一份額度。' +
+      "目前 ChatGPT 只用來回答問題，整理知識庫用 Claude。</p>" +
+      (CN.waitGpt ? '<p class="muted">等你在瀏覽器同意…</p>' : "");
+    return card("ChatGPT", "還沒連接", "off", body);
+  }
+  const opts = (CN.models || (model ? [model] : [])).map(m => '<option value="' + esc(m) + '"' + (m === model ? " selected" : "") + ">" + esc(m) + "</option>").join("");
+  body = "<p><b>Using ChatGPT plan</b>" + (g.email ? '<span class="muted">（' + esc(g.email) + "）</span>" : "") + "。" +
+    (g.plan_use ? "" : '<span class="cn-err">你沒有同意讓 app 使用方案額度，請中斷後重新連接。</span>') + "</p>" +
+    '<div class="cn-acts"><label class="small">模型 <select id="cn-gpt-model"><option value="">自動（清單第一個）</option>' + opts + "</select></label>" +
+    (CN.models ? "" : '<button class="ghost" data-cn="gpt-models">載入模型清單</button>') + "</div>" +
+    '<div class="cn-acts"><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener">Manage usage</a>' +
+    '<button class="ghost" data-cn="gpt-signout">中斷連接</button></div>';
+  return card("ChatGPT", "已連接", "on", body);
+}
+
+function jevCard(j) {
+  const src = { app: "已設定", env: "用環境變數裡的金鑰", shared: "用 ~/.config/typesafe 裡的金鑰" }[j.source] || "還沒設定";
+  const body = "<p>Jev 幫 app 找相關的頁、判斷問題難度、檢查整理結果。可以不設，app 會改用關鍵字搜尋。用你自己的 TypeSafe 金鑰，費用很低。</p>" +
+    '<div class="cn-acts"><input id="cn-jev-key" type="password" autocomplete="off" placeholder="' + (j.has_key ? "換一把金鑰" : "貼上 TypeSafe API 金鑰") + '">' +
+    '<button class="primary" data-cn="jev-save">' + (j.has_key ? "更換" : "儲存") + "</button>" +
+    (j.source === "app" ? '<button class="ghost" data-cn="jev-remove">移除</button>' : "") + "</div>" +
+    (CN.jevMsg ? '<p class="' + (CN.jevMsg.startsWith("✓") ? "muted" : "cn-err") + ' small">' + esc(CN.jevMsg) + "</p>" : "") +
+    '<p class="muted small">金鑰只存在這台電腦（app 資料夾，只有你的帳號能讀）。儲存前會先試一次，確定能用。</p>';
+  return card("Jev", src, j.has_key ? "on" : "off", body);
+}
+
+function langCard(l) {
+  const sel = ["auto", "en", "zh-Hant", "zh-Hans"].map(k => '<option value="' + k + '"' + (k === l.wiki ? " selected" : "") + ">" +
+    (k === "auto" ? "自動判斷" : LANG_NAME[k]) + "</option>").join("");
+  const how = { user: "你設定的", wiki: "照知識庫現有頁面的語言", notes: "照大部分筆記的語言", mixed: "筆記混用幾種語言，第一次請 AI 整理時會問你", empty: "還沒有筆記，會用介面語言" }[l.how] || "";
+  const res = l.resolved ? "目前用 <b>" + esc(LANG_NAME[l.resolved]) + "</b>（" + how + "）" : how;
+  const det = l.detected ? "筆記：" + (pct(l.detected.notes) || "—") + (Object.keys(l.detected.wiki || {}).length ? "；知識庫：" + pct(l.detected.wiki) : "") : "";
+  const body = '<div class="cn-acts"><label>知識庫的語言 <select id="cn-lang">' + sel + "</select></label></div>" +
+    '<p class="small">' + res + "</p>" + (det ? '<p class="muted small">' + esc(det) + "</p>" : "") +
+    '<p class="muted small">AI 整理出來的頁面用這個語言寫，原文的關鍵詞和引文保留在旁邊；繁體和簡體不會互轉。AI 跟你說話用介面的語言（跟著系統），' +
+    "問答則跟著你提問的語言。只對這個筆記庫有效。</p>";
+  return card("語言", "", "", body);
+}
+
+async function gptWelcome() {
+  await api("/api/connect/chatgpt/welcomed", {}).catch(() => {});
+  dialog("You're using your ChatGPT plan", "<p>Eligible usage in this app uses your ChatGPT plan. Manage usage in your ChatGPT settings.</p>" +
+    '<p class="muted">之後在 app 裡用 ChatGPT 回答，用量算在你的 ChatGPT 方案。可以在 <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener">ChatGPT 設定 → Usage</a> 查看。</p>', "Got it");
+}
+
+async function connectClick(e) {
+  const t = e.target.closest ? e.target.closest("[data-cn], [data-cn-close]") : e.target;
+  if (!t) { if (e.target && e.target.id === "connect") closeConnect(); return; }
+  if (t.hasAttribute("data-cn-close")) return closeConnect();
+  const what = t.dataset.cn;
+  const run = async (path, body = {}) => { try { return await api(path, body); } catch (err) { toast(err.message); return null; } };
+  if (what === "claude-connect") await run("/api/connect/claude/connect");
+  else if (what === "gpt-start") { if (await run("/api/connect/chatgpt/start")) CN.waitGpt = true; }
+  else if (what === "gpt-signout") { if (await dialog("中斷 ChatGPT 連接？", "<p>app 會撤銷並刪除這台電腦上的 ChatGPT 登入。之後可以再連接。</p>", "中斷", true)) await run("/api/connect/chatgpt/signout"); CN.models = null; }
+  else if (what === "gpt-models") { const r = await run("/api/connect/chatgpt/models"); if (r) CN.models = r.models; }
+  else if (what === "jev-save") {
+    const k = ($("#cn-jev-key") || {}).value.trim(); if (!k) return;
+    t.disabled = true; t.textContent = "測試中…";
+    try { await api("/api/connect/jev/save", { key: k }); CN.jevMsg = "✓ 金鑰可以用，已儲存。"; $("#cn-jev-key").value = ""; await refreshTree(); }
+    catch (err) { CN.jevMsg = err.message; }
+  }
+  else if (what === "jev-remove") { await run("/api/connect/jev/remove"); CN.jevMsg = ""; await refreshTree(); }
+  refreshConnect();
+}
+document.addEventListener("change", async e => {
+  if (e.target.id === "cn-gpt-model") { await api("/api/connect/chatgpt/model", { model: e.target.value }).catch(err => toast(err.message)); }
+  if (e.target.id === "cn-lang") { await api("/api/lang/set", { wiki: e.target.value }).catch(err => toast(err.message)); refreshConnect(); }
+});
+
+// first run: nothing connected yet → show the page once
+(async () => {
+  if (store.get("connect-seen", false)) return;
+  try {
+    const st = await api("/api/connect/status");
+    if (!(st.claude.logged_in || st.chatgpt.connected)) showConnect();
+    store.set("connect-seen", true);
+  } catch (e) {}
+})();

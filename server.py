@@ -58,6 +58,9 @@ def app_dir():
 
 
 APP = app_dir()
+import connect                                        # noqa: E402 - the user's own AI accounts and Jev key
+connect.APP = APP
+connect.jev_load_into_env()
 SETTINGS_FILE = os.path.join(APP, "settings.json")
 
 
@@ -578,6 +581,102 @@ def triage_unit(rel):
 
 def has_jev():
     return bool(os.environ.get("TYPESAFE_API_KEY") or os.path.exists(jev.KEY_FILE))
+
+
+# ------------------------------------------------------------------ the wiki's language (per vault)
+# Default "auto": the language the wiki already uses; in an empty wiki, the one most notes are in. When the notes
+# are mixed (no language in 80% of them), the first AI task asks the user. The user can change it any time.
+# Detection runs here, on this Mac; nothing is sent anywhere.
+
+LANGS = {"en": "English", "zh-Hant": "Traditional Chinese (繁體中文)", "zh-Hans": "Simplified Chinese (简体中文)"}
+LANG_SHORT = {"en": "英文", "zh-Hant": "繁體中文", "zh-Hans": "簡體中文"}
+_ZH_SETS = []
+
+
+def zh_sets():
+    if not _ZH_SETS:
+        try:
+            d = json.load(open(os.path.join(HERE, "tools", "t2s_chars.json"), encoding="utf-8"))
+            _ZH_SETS[:] = [{k for k, v in d["t2s"].items() if k != v}, set(d["simplified_only"])]
+        except (OSError, ValueError, KeyError):
+            _ZH_SETS[:] = [set(), set()]
+    return _ZH_SETS
+
+
+def text_lang(text):
+    """'en', 'zh-Hant', 'zh-Hans' or None (too little text)."""
+    text = re.sub(r"^---\n.*?\n---\n", "", text, flags=re.S)
+    text = re.sub(r"```.*?```|https?://\S+|!\[\[[^\]]*\]\]|\[\[[^\]]*\]\]|<[^>]+>", " ", text, flags=re.S)
+    han = re.findall(r"[一-鿿]", text)
+    words = len(re.findall(r"[A-Za-z]{2,}", text))
+    if len(han) + words < 30:
+        return None
+    if len(han) < words:            # a Chinese character carries about a word's meaning
+        return "en"
+    trad, simp = zh_sets()
+    t = sum(c in trad for c in han)
+    s = sum(c in simp for c in han)
+    return "zh-Hans" if s > t else "zh-Hant"
+
+
+def detect_lang():
+    """Share of each language among the wiki's own pages and among the user's notes (not the journal)."""
+    def shares(texts):
+        c = Counter(l for l in (text_lang(t) for t in texts) if l)
+        n = sum(c.values())
+        return {k: round(v / n, 2) for k, v in c.most_common()} if n else {}
+    v = V.fresh()
+    wiki_texts = [p.body for p in v.pages if p.type in ("concept", "entity", "analysis", "overview")][:400]
+    note_texts = []
+    for rel in wiki.raw_files():
+        if not rel.endswith(".md") or is_private(rel):
+            continue
+        try:
+            with open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace") as f:
+                note_texts.append(f.read(6000))
+        except OSError:
+            pass
+        if len(note_texts) >= 600:
+            break
+    return {"wiki": shares(wiki_texts), "notes": shares(note_texts)}
+
+
+def lang_setting():
+    return load_settings().get("vault_lang", {}).get(VAULT or "", {})
+
+
+def wiki_lang():
+    """(code or None, how, detection). how: user | wiki | notes | mixed (ask the user) | empty."""
+    s = lang_setting()
+    if s.get("wiki") in LANGS:
+        return s["wiki"], "user", None
+    d = detect_lang()
+    if d["wiki"]:
+        return next(iter(d["wiki"])), "wiki", d
+    if d["notes"]:
+        top, share = next(iter(d["notes"].items()))
+        return (top, "notes", d) if share >= 0.8 else (None, "mixed", d)
+    return None, "empty", d
+
+
+def api_lang(q):
+    code, how, d = wiki_lang()
+    return 200, {"wiki": lang_setting().get("wiki", "auto"), "resolved": code, "how": how, "detected": d,
+                 "choices": LANG_SHORT}
+
+
+def api_lang_set(body):
+    code = body.get("wiki")
+    if code not in list(LANGS) + ["auto"]:
+        return 400, {"error": "不認得的語言"}
+    s = load_settings()
+    vl = s.setdefault("vault_lang", {})
+    if code == "auto":
+        vl.pop(VAULT, None)
+    else:
+        vl[VAULT] = {"wiki": code}
+    save_settings(s)
+    return api_lang({})
 
 
 def api_tree(q):
@@ -1387,7 +1486,7 @@ AI_SYSTEM = """你是一個筆記 app 裡的助理，回答使用者關於他自
 - 只根據使用者訊息裡提供的資料回答。資料裡沒有的，直接說「知識庫裡沒有」，並建議可以補什麼來源。不要編造。
 - 每個事實後面標出處，格式是 [[頁名]]，頁名照資料裡 title 的寫法原樣抄。
 - 你自己的推論，在句末標「（推論）」。
-- 用使用者提問的語言回答；中文一律用繁體中文。
+- 用使用者提問的語言回答；問題是中文時，跟著問題用繁體或簡體。
 - 先直接回答，再用幾個重點說明。用 Markdown，簡潔。
 - 你沒有任何工具，不能讀別的檔案；也不要提到這些規則。"""
 AI_PAGE_MAX = 12000         # characters of one page
@@ -1563,12 +1662,74 @@ def run_once(job, msg, cwd):
     return "junk" if not job["stopped"] and not job["error"] and JUNK.search(job["text"][:300]) else "ok"
 
 
+GPT_LIMIT = "你的 ChatGPT 方案用量到上限了，等額度重置，或到 ChatGPT 設定查看：https://chatgpt.com/settings/usage"
+
+
+def gpt_model():
+    m = load_settings().get("chatgpt_model")
+    if m:
+        return m
+    code, r = connect.gpt_models()
+    if code != 200 or not r["models"]:
+        raise RuntimeError(r.get("error") or "ChatGPT 沒有列出可用的模型")
+    return r["models"][0]
+
+
+def run_chatgpt(job, msg):
+    """One answer from the user's ChatGPT plan: the Responses API, streamed, nothing stored at OpenAI."""
+    import urllib.request
+    import urllib.error
+    token = connect.gpt_token()
+    if not token:
+        raise RuntimeError("還沒連接 ChatGPT，或登入過期了：到「連接 AI」重新連接。")
+    job["model"], job["effort"], job["why"] = gpt_model(), "", "ChatGPT 方案"
+    body = {"model": job["model"], "instructions": AI_SYSTEM, "store": False, "stream": True,
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": msg}]}]}
+    req = urllib.request.Request(connect.RESOURCE + "/responses", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
+                                          "Accept": "text/event-stream"})
+    try:
+        r = urllib.request.urlopen(req, timeout=300, context=connect._ssl())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        if "usage_limit" in raw:
+            raise RuntimeError(GPT_LIMIT)
+        raise RuntimeError("ChatGPT 回應 %s：%s" % (e.code, raw[:300]))
+    job["proc"] = r                               # stop closes it
+    done = False
+    for line in r:
+        if job["stopped"]:
+            break
+        line = line.decode("utf-8", "replace").strip()
+        if not line.startswith("data:"):
+            continue
+        try:
+            ev = json.loads(line[5:])
+        except ValueError:
+            continue
+        t = ev.get("type", "")
+        if t == "response.output_text.delta":
+            job["text"] += ev.get("delta", "")
+        elif t == "response.completed":
+            done = True
+        elif t in ("response.failed", "error"):
+            err = (ev.get("response") or {}).get("error") or ev.get("error") or ev
+            code = err.get("code", "") if isinstance(err, dict) else ""
+            raise RuntimeError(GPT_LIMIT if "usage_limit" in str(code) else
+                               "ChatGPT 沒有完成回答（%s）" % (code or str(err)[:200]))
+    if not done and not job["stopped"]:
+        raise RuntimeError("ChatGPT 的回答中斷了，請再問一次。")
+
+
 def run_ai(job, msg):
     cwd = os.path.join(APP, "agent")              # an empty folder: no CLAUDE.md, no project settings
     os.makedirs(cwd, exist_ok=True)
     if os.environ.get("NOTES_AI_DEBUG"):
         open(os.path.join(cwd, "last_prompt.txt"), "w", encoding="utf-8").write(msg)
     try:
+        if job.get("provider") == "chatgpt":
+            run_chatgpt(job, msg)
+            raise StopIteration
         job["model"], job["effort"], job["why"] = route(job)
         tries = 0
         while not job["stopped"]:
@@ -1584,8 +1745,10 @@ def run_ai(job, msg):
                     break
                 job["why"] += "；%s 連續 %d 次回答不正常，改用 Sonnet" % (job["model"].capitalize(), tries)
                 job["model"], tries = "sonnet", 0
+    except StopIteration:
+        pass
     except Exception as e:                        # not installed, not logged in, killed…
-        job["error"] = str(e)
+        job["error"] = None if job["stopped"] else str(e)
     job["status"] = "stopped" if job["stopped"] else "error" if job["error"] else "done"
     job["seconds"] = round(time.time() - job["started"], 1)
 
@@ -1594,9 +1757,12 @@ def api_ai_ask(body):
     q = str(body.get("q") or "").strip()
     if not q:
         return 400, {"error": "沒有問題"}
+    provider = "chatgpt" if body.get("provider") == "chatgpt" else "claude"
     exe = claude_bin()
-    if not exe:
-        return 400, {"error": "找不到 Claude Code（claude 指令）。先安裝並登入 Claude Code。"}
+    if provider == "claude" and not exe:
+        return 400, {"error": "還沒連接 Claude：到「連接 AI」安裝並登入 Claude Code。", "connect": True}
+    if provider == "chatgpt" and not connect.gpt_status()["connected"]:
+        return 400, {"error": "還沒連接 ChatGPT：到「連接 AI」按「Continue with ChatGPT」。", "connect": True}
     msg, used, ctx_used = ai_prompt(body)
     jid = secrets.token_hex(6)
     choice = body.get("model") if body.get("model") in MODELS + ("auto",) else ai_model()
@@ -1605,7 +1771,7 @@ def api_ai_ask(body):
     pages = [{"title": u["title"], "summary": str(v.by_rel[u["path"]].fm.get("summary", ""))[:300]} for u in used]
     state = {"question": str(body.get("q") or "")[:2000], "open_note": ctx_used["title"] if ctx_used else "",
              "earlier": [str(h.get("q") or "")[:500] for h in (body.get("history") or [])][-2:], "pages": pages}
-    job = AI_JOBS[jid] = {"bin": exe, "choice": choice, "effort_choice": effort_choice, "model": None, "effort": None, "why": "", "text": "",
+    job = AI_JOBS[jid] = {"provider": provider, "bin": exe, "choice": choice, "effort_choice": effort_choice, "model": None, "effort": None, "why": "", "text": "",
                           "status": "running", "error": None, "stopped": False, "started": time.time(), "proc": None,
                           "jev": bool(body.get("jev")) and has_jev(), "route_state": state}
     for k in [k for k, j in AI_JOBS.items() if j["status"] != "running" and time.time() - j["started"] > 3600]:
@@ -1627,7 +1793,10 @@ def api_ai_stop(body):
     if job and job["status"] == "running":
         job["stopped"] = True
         if job["proc"]:
-            job["proc"].kill()
+            try:
+                job["proc"].kill() if hasattr(job["proc"], "kill") else job["proc"].close()
+            except Exception:                     # noqa: BLE001 - already closed
+                pass
     return 200, {"ok": True}
 
 
@@ -1687,11 +1856,29 @@ def agent_rules():
     return allow, write, deny
 
 
+UI_LANGS = {"zh-Hant": "Traditional Chinese (繁體中文)", "zh-Hans": "Simplified Chinese (简体中文)", "en": "English"}
+
+
+def ui_lang(tag):
+    """The app's interface language from the browser's (the system's): 'zh-TW' -> zh-Hant, 'zh-CN' -> zh-Hans."""
+    t = str(tag or "").lower()
+    if t.startswith("zh"):
+        return "zh-Hans" if any(x in t for x in ("hans", "-cn", "-sg", "-my")) else "zh-Hant"
+    return "en"
+
+
 def agent_facts(job):
     notes = wiki.RAW_REL + "/" if wiki.RAW_REL else "the whole vault except wiki/, tools/, templates/ and hidden folders"
-    return ("Vault: %s\nThe user's notes: %s\nJournal (off limits): %s/\nToday: %s\nJev: %s\n"
-            "The user's language: Traditional Chinese (繁體中文); write your messages to the user in it.\n"
-            % (VAULT, notes, wiki.JOURNAL_REL, time.strftime("%Y-%m-%d"), "on" if job["jev"] else "off"))
+    wl = job.get("wiki_lang")
+    how = {"user": "the user's setting", "wiki": "the language the wiki's pages already use",
+           "notes": "the language most of the user's notes are in",
+           "interface": "the app's interface language; there are no notes to go by yet"}.get(job.get("wiki_lang_how"), "")
+    lang = ("Wiki language: %s (%s). Write wiki pages in it.\n" % (LANGS[wl], how) if wl else
+            "Wiki language: not set; follow the Language rules in your instructions.\n")
+    return ("Vault: %s\nThe user's notes: %s\nJournal (off limits): %s/\nToday: %s\nJev: %s\n%s"
+            "The user's language (the app's interface): %s; write your messages to the user (plan, report) in it.\n"
+            % (VAULT, notes, wiki.JOURNAL_REL, time.strftime("%Y-%m-%d"), "on" if job["jev"] else "off", lang,
+               UI_LANGS[job.get("ui_lang") or "en"]))
 
 
 def agent_cmd(job, phase):
@@ -1874,6 +2061,13 @@ def api_agent_start(body):
         label = "檢查知識庫"
     else:
         return 400, {"error": "不認得的工作"}
+    if body.get("lang") in LANGS:                 # the user's answer to "which language?" below
+        api_lang_set({"wiki": body["lang"]})
+    wl, how, det = wiki_lang()
+    if how == "mixed":                            # notes in several languages and no wiki yet: ask once
+        return 409, {"error": "need_lang", "need_lang": det["notes"], "choices": LANG_SHORT}
+    if how == "empty":
+        wl, how = ui_lang(body.get("ui_lang")), "interface"
     model = body.get("model") if body.get("model") in MODELS else "sonnet"
     effort = body.get("effort") if body.get("effort") in EFFORTS else ("medium" if task == "analysis" else "high")
     import uuid
@@ -1883,7 +2077,7 @@ def api_agent_start(body):
         "jev": bool(body.get("jev")) and has_jev(), "session": str(uuid.uuid4()), "status": "planning",
         "steps": [], "text": "", "message": "", "plan": None, "report": "", "changes": [], "outside": [],
         "error": None, "stopped": False, "proc": None, "cost": 0.0, "denied": 0, "started": time.time(),
-        "undone": False, "vault": VAULT}
+        "undone": False, "vault": VAULT, "wiki_lang": wl, "wiki_lang_how": how, "ui_lang": ui_lang(body.get("ui_lang"))}
     threading.Thread(target=agent_plan, args=(job,), daemon=True).start()
     return 200, {"id": jid}
 
@@ -2097,18 +2291,46 @@ def api_reveal(body):
 GET = {"/api/tree": api_tree, "/api/changes": api_changes, "/api/note": api_note, "/api/panel": api_panel,
        "/api/search": api_search, "/api/queue": api_queue, "/api/history": api_history,
        "/api/attachments": api_attachments, "/api/t2s": api_t2s, "/api/ai/poll": api_ai_poll,
-       "/api/agent/poll": api_agent_poll, "/api/agent/diff": api_agent_diff}
+       "/api/agent/poll": api_agent_poll, "/api/agent/diff": api_agent_diff, "/api/lang": api_lang}
 POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_save,
         "/api/journal": api_journal, "/api/attach": api_attach, "/api/move": api_move,
         "/api/delete": api_delete, "/api/html2note": api_html2note, "/api/restore": api_restore, "/api/import": api_import,
         "/api/new": api_new, "/api/rename": api_rename, "/api/history/restore": api_history_restore,
         "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop,
         "/api/agent/start": api_agent_start, "/api/agent/approve": api_agent_approve, "/api/agent/stop": api_agent_stop,
-        "/api/agent/undo": api_agent_undo}
+        "/api/agent/undo": api_agent_undo, "/api/lang/set": api_lang_set}
 # these work with no vault open
 GET_APP = {"/api/vaults": api_vaults, "/api/browse": api_browse}
 POST_APP = {"/api/vault/open": api_vault_open, "/api/vault/create": api_vault_create, "/api/vault/forget": api_vault_forget}
 COOKIE = "notesapp_key"
+
+
+def api_connect_status(q):
+    return 200, {"claude": connect.claude_status(), "chatgpt": connect.gpt_status(), "jev": connect.jev_status(),
+                 "chatgpt_model": load_settings().get("chatgpt_model")}
+
+
+def api_chatgpt_model(body):
+    s = load_settings()
+    if body.get("model"):
+        s["chatgpt_model"] = str(body["model"])[:100]
+    else:
+        s.pop("chatgpt_model", None)
+    save_settings(s)
+    return 200, {"ok": True}
+
+
+CONNECT_GET = {"/api/connect/status": api_connect_status, "/api/connect/chatgpt/models": lambda q: connect.gpt_models()}
+CONNECT_POST = {
+    "/api/connect/claude/connect": lambda b: connect.claude_connect(),
+    "/api/connect/claude/cancel": lambda b: connect.claude_cancel(),
+    "/api/connect/chatgpt/start": lambda b: connect.gpt_start(),
+    "/api/connect/chatgpt/signout": lambda b: connect.gpt_signout(),
+    "/api/connect/chatgpt/welcomed": lambda b: connect.gpt_welcomed(),
+    "/api/connect/chatgpt/model": api_chatgpt_model,
+    "/api/connect/jev/save": connect.jev_save,
+    "/api/connect/jev/remove": lambda b: connect.jev_remove(),
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2163,6 +2385,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if u.path == "/auth/callback":
+            code, html = connect.gpt_callback(parse_qs(u.query))
+            return self.send(code, html.encode("utf-8"), "text/html; charset=utf-8")
+        if u.path in CONNECT_GET:
+            if self.gate(u.path, ()):
+                code, out = CONNECT_GET[u.path](parse_qs(u.query))
+                self.send(code, out)
+            return
         if u.path in GET or u.path in GET_APP or u.path == "/file":
             if not self.gate(u.path, set(GET) | {"/file"}):
                 return
@@ -2213,7 +2443,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.host_ok():
             return self.send(403, {"error": "bad host"})
         u = urlparse(self.path)
-        if u.path not in POST and u.path not in POST_APP:
+        if u.path not in POST and u.path not in POST_APP and u.path not in CONNECT_POST:
             return self.send(404, {"error": "not found"})
         port = self.server.server_address[1]
         if self.headers.get("Origin") not in (None, "http://127.0.0.1:%d" % port, "http://localhost:%d" % port):
@@ -2225,6 +2455,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self.send(400, {"error": "bad json"})
+        if u.path in CONNECT_POST:
+            code, out = CONNECT_POST[u.path](body)
+            return self.send(code, out)
         with SWITCH.exclusive() if u.path in POST_APP else SWITCH.shared():
             code, out = (POST.get(u.path) or POST_APP[u.path])(body)
         self.send(code, out)
@@ -2240,6 +2473,7 @@ def main():
         srv = ThreadingHTTPServer(("127.0.0.1", ARGS.port), Handler)  # noqa
     except OSError:                                     # the port is taken: any free one
         srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    connect.PORT = srv.server_address[1]
     url = "http://127.0.0.1:%d/?k=%s" % (srv.server_address[1], KEY)
     print("Notes app on %s" % url)
     print("  vault: %s%s" % (VAULT or "(none yet: the start screen)", ", PROTECTED → READ-ONLY" if PROTECTED

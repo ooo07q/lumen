@@ -33,11 +33,13 @@ A note counts as ingested when a source page's `source_path` points to it (or to
 
 ### Language
 
-Write in the language the existing wiki pages use (look at `wiki/Overview.md` and a few pages); in an empty wiki,
-the language most of the user's notes are in. Page titles too, except a source page, which keeps its source's
-own title, and proper nouns. Keep key terms and short quotes in the original next to the
-translation. If existing concept pages carry their name in a second language as an alias (for example Traditional
-Chinese), give every new concept its name in that language too. Talk to the user in the language of the task.
+The task message names the wiki language; the app works it out (the user's setting, else the language the wiki
+already uses, else the one most notes are in, after asking the user when the notes are mixed). Write every page in
+it, whatever the note's language: page titles too, except a source page, which keeps its source's own title, and
+proper nouns. Keep key terms and short quotes in the original next to the translation. Traditional and Simplified
+Chinese are different settings: never convert a quote or a title from one to the other. If existing concept pages
+carry their name in a second language as an alias, give every new concept its name in that language too.
+Write your messages to the user (the plan message and the report) in the user's language the task message names.
 
 ## Page conventions
 
