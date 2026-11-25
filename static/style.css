@@ -456,3 +456,5 @@ h1.renamable:hover { background: var(--panel); }
 .cn-err { color: var(--missing); }
 .cn .small, .cn-radio { font-size: 12.5px; }
 .cn-radio { display: block; margin: 4px 0; font-size: 14px; }
+
+.cn-sub { display: block; font-size: 12px; font-weight: 400; color: var(--muted, #888); margin-top: 2px; }

@@ -29,7 +29,7 @@ import urllib.request
 
 APP = None          # set by server.py
 PORT = None         # the server's port (the ChatGPT redirect URI uses it)
-APP_NAME = "Notes app"
+APP_NAME = "Lumen"
 
 
 def _ssl():
@@ -221,7 +221,7 @@ def _curl_home():
         d = os.path.join(APP, "curl")
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, ".curlrc"), "w") as f:
-            f.write("# written by the notes app: this network downloads Claude Code faster over IPv4\nipv4\n")
+            f.write("# written by Lumen: this network downloads Claude Code faster over IPv4\nipv4\n")
         return d
     return None
 
@@ -462,9 +462,9 @@ def gpt_callback(q):
     state = (q.get("state") or [""])[0]
     pend = PENDING.pop(state, None)
     if not pend:
-        return 400, page("連接沒有完成", "這個登入連結已經用過或過期了。回到 app 再按一次「Continue with ChatGPT」。")
+        return 400, page("連接沒有完成", "這個登入連結已經用過或過期了。回到 Lumen 再按一次「Continue with ChatGPT」。")
     if q.get("error"):
-        return 200, page("沒有連接 ChatGPT", "你在 ChatGPT 的頁面沒有同意。回到 app 隨時可以再試。")
+        return 200, page("沒有連接 ChatGPT", "你在 ChatGPT 的頁面沒有同意。回到 Lumen 隨時可以再試。")
     issued = (q.get("client_id") or [""])[0] or pend["client_id"]
     if pend["client_id"] != "dynamic_agent_client" and issued != pend["client_id"]:
         return 400, page("連接沒有完成", "OpenAI 回傳的 app 編號和之前的不一樣，為了安全沒有接受。")
@@ -494,8 +494,8 @@ def gpt_callback(q):
               "email": claims.get("email"), "connected_at": time.time(), "welcomed": False})
     gpt_save(d)
     if "chatgpt.tokens.use.direct" not in d["scope"].split():
-        return 200, page("已登入，但沒有方案使用權", "你登入了 ChatGPT，但沒有同意讓這個 app 使用你的 ChatGPT 方案。回到 app 可以再連接一次。")
-    return 200, page("已連接 ChatGPT", "可以關掉這個分頁，回到 app。")
+        return 200, page("已登入，但沒有方案使用權", "你登入了 ChatGPT，但沒有同意讓這個 app 使用你的 ChatGPT 方案。回到 Lumen 可以再連接一次。")
+    return 200, page("已連接 ChatGPT", "可以關掉這個分頁，回到 Lumen。")
 
 
 def page(title, text):

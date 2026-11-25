@@ -36,6 +36,7 @@ import threading
 import io
 import itertools
 import json
+import math
 import os
 import re
 import ssl
@@ -433,12 +434,23 @@ def mentions(text, exclude=(), match=None):
     return out
 
 
+def part_text(text, part):
+    """The note with only lines `part` ("A-B") kept (others blank, so line numbers hold); the frontmatter stays."""
+    if not part:
+        return text
+    lines = text.split("\n")
+    a, _, b = part.partition("-")
+    a, b = int(a), int(b or len(lines))
+    fm_end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), -1) if lines and lines[0].strip() == "---" else -1
+    return "\n".join(ln if (i <= fm_end or a <= i + 1 <= b) else "" for i, ln in enumerate(lines))
+
+
 def cmd_hits(args):
     path = note_path(args.file)
     raw = read(path)
     fm, _, _ = wiki.parse_frontmatter(raw)
     authors = [re.sub(r"[\[\]\"]", "", str(a)) for a in (fm.get("author") or [])] if isinstance(fm.get("author"), list) else []
-    text = wiki.zh(flat(raw))
+    text = wiki.zh(flat(part_text(raw, getattr(args, "lines", None))))
     found = mentions(text, exclude=authors)
     byname = {p.name: p for p in wiki.load_pages()}
     top = sorted(found, key=lambda p: -len(found[p][1]))[:args.max]
@@ -506,13 +518,15 @@ def cmd_terms(args):
     path = note_path(args.file)
     rel = os.path.relpath(path, wiki.VAULT)
     cf = os.path.join(wiki.DATA, "terms_cache.json")
-    key = terms_key(path, args.max)
+    part = getattr(args, "lines", None)
+    key = terms_key(path, args.max) + "|" + (part or "")
     try:
         cache = json.load(open(cf, encoding="utf-8"))
     except (OSError, ValueError):
         cache = {}
-    if cache.get(rel, {}).get("key") == key:
-        sys.stdout.write(cache[rel]["out"])
+    ck = rel + ("#" + part if part else "")
+    if cache.get(ck, {}).get("key") == key:
+        sys.stdout.write(cache[ck]["out"])
         return
     buf = io.StringIO()                  # its own buffer, not redirect_stdout: prep runs sections in threads
     n_failed = FAILED[0]
@@ -523,7 +537,7 @@ def cmd_terms(args):
             cache = json.load(open(cf, encoding="utf-8"))
         except (OSError, ValueError):
             cache = {}
-        cache[rel] = {"key": key, "out": buf.getvalue()}
+        cache[ck] = {"key": key, "out": buf.getvalue()}
         tmp = "%s.%d.tmp" % (cf, os.getpid())
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False)
@@ -531,7 +545,7 @@ def cmd_terms(args):
 
 
 def _terms(args, path, out_):
-    lines = read(path).split("\n")
+    lines = part_text(read(path), getattr(args, "lines", None)).split("\n")
     body_start = next((i + 1 for i in range(1, len(lines)) if lines[i] == "---"), 0) if lines[0] == "---" else 0
     segs = wiki.segments(lines, [(body_start, len(lines))])
     library = wiki.raw_texts(skip=path)
@@ -624,7 +638,7 @@ def phrases_all(args):
     os.replace(tmp, PHRASES)
     asked = {key(pp) for pp in todo}
     show = [pp for pp in rows if key(pp) in cache and (args.all or key(pp) in asked)]
-    print("%d glued names across raw/; asked Jev about %d new ones (%s)" % (
+    print("%d glued names across the notes; asked Jev about %d new ones (%s)" % (
         len(rows), len(todo), "listing all" if args.all else "listing those; --all for every one"))
     for label, keep in (("add to not_aliases (the phrase means something else)", "yes"), ("check", "check")):
         sel = [pp for pp in show if band(cache[key(pp)]["p"]) == keep]
@@ -804,7 +818,7 @@ def cmd_aliases(args):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"files": files, "using": new_using}, f, ensure_ascii=False)
         os.replace(tmp, ALIASES_USE)
-    print("raw/: %d notes, %d new or changed since the last run (%d read)" % (len(files), len(changed), len(texts)),
+    print("notes: %d, %d new or changed since the last run (%d read)" % (len(files), len(changed), len(texts)),
           file=sys.stderr)
     import hashlib
     state = lambda it: {"page": page_card(it[0]), "alias": it[1], "notes_using": it[2], "snippets": it[3]}
@@ -834,7 +848,7 @@ def cmd_aliases(args):
             for (p, al, n, _), pr in sorted(sel, key=lambda x: x[1]):
                 print("  %.2f  %-34s %-22s in %d notes" % (pr, p.name[:34], al[:22], n))
     if unsourced:
-        print("\nentity Chinese names found in no raw note (§2: remove unless it is the subject's own name):")
+        print("\nentity Chinese names found in no note (remove unless it is the subject's own name):")
         for name, al in unsourced:
             print("  %-34s %s" % (name[:34], al))
 
@@ -1111,13 +1125,177 @@ def key_lines(path, coverage=KEY_COVERAGE, part=None):
         keep.add(pr["line"])
         got += w
     kept = len(keep)
+    # the substantive paragraphs left out, by their main sentence: a pointer at each gap (an example, a number, a
+    # name the summary may want), at a few dozen tokens each instead of the paragraph
+    pointers = {pr["line"]: re.sub(r"\s+", " ", sent).strip()[:220]
+                for w, pr, (_, sent) in zip(weight, paras, rated) if w >= 0.5 and pr["line"] not in keep and sent}
     keep |= {i for i, _ in heads}
     if lines and lines[0].strip() == "---":                    # the frontmatter: author, pages, PDF, ...
         end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
         keep |= set(range(end + 1))
-    return keep, {"paragraphs": len(paras), "kept": kept, "coverage": round(got / total, 2),
+    return keep, {"paragraphs": len(paras), "kept": kept, "coverage": round(got / total, 2), "pointers": pointers,
                   "tokens_kept": wiki.est_tokens("\n".join(lines[i] for i in keep if i in span)),
                   "tokens": wiki.est_tokens("\n".join(lines[i] for i in span))}
+
+
+# ------------------------------------------------------------ a long note's parts
+
+BOUND_Q = S("`before` is the end of a passage of a book or a note; `next` is the paragraph that follows it (with the "
+            "heading above it, if any). How far does `next` move away from what `before` is about?", [
+                "Same thread: it goes on with the same point.",
+                "A new point within the same topic.",
+                "A new topic or section.",
+                "A new chapter or part: a different subject begins."])
+# What one run organises well: about one book chapter's key points, in Jev's key-point weight (a paragraph weighs
+# 0 as filler or background, 1 as a substantive claim, 2 as a central one). A test, 2026-11: three chapters of
+# 35-44 each, one run per chapter, caught more key points (70% vs 62%) than one run over all three.
+PART_WEIGHT = 40
+
+
+def shift_depths(paras, k=3):
+    """For each gap before paragraph j: how sharply the vocabulary changes there (TextTiling depth: the
+    similarity of the k paragraphs before and after, against the peaks on either side)."""
+    bags = [Counter(wiki.content_units(p["text"])) for p in paras]
+
+    def cos(a, b):
+        num = sum(v * b.get(u, 0) for u, v in a.items())
+        den = math.sqrt(sum(v * v for v in a.values()) * sum(v * v for v in b.values())) or 1
+        return num / den
+    sim = [1.0] * len(paras)
+    for j in range(1, len(paras)):
+        left, right = Counter(), Counter()
+        for x in bags[max(0, j - k):j]:
+            left.update(x)
+        for x in bags[j:j + k]:
+            right.update(x)
+        sim[j] = cos(left, right)
+    depth = [0.0] * len(paras)
+    for j in range(1, len(paras)):
+        lp = max(sim[max(1, j - 10):j + 1])
+        rp = max(sim[j:min(len(paras), j + 11)])
+        depth[j] = (lp - sim[j]) + (rp - sim[j])
+    return depth
+
+
+def note_parts(path):
+    """A long note's parts, by its key points and its meaning, not its length: [(title or None, start, end)]
+    1-based lines, or [] when one run can organise it. One run is enough while the note's key points (Jev's
+    paragraph ratings) fit about one chapter's worth (PART_WEIGHT). Otherwise the cuts go where Jev judges that a
+    new chapter or topic begins, among candidates (headings, and the places where the vocabulary shifts most), so
+    that each part holds about one chapter's worth of key points and no cut falls inside a topic. Kept per note
+    in the data folder, so the parts stay the same from one run to the next."""
+    text = read(path)
+    rel = os.path.relpath(path, wiki.VAULT)
+    sha = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+    cf = os.path.join(wiki.DATA, "note_parts.json")
+    try:
+        cache = json.load(open(cf, encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    if (cache.get(rel) or {}).get("sha") == sha and (cache[rel].get("v") == PART_WEIGHT):
+        return [tuple(x) for x in cache[rel]["parts"]]
+    lines = text.split("\n")
+    fm, _, _ = wiki.parse_frontmatter(text)
+    title = str(fm.get("title") or os.path.splitext(os.path.basename(path))[0])
+    paras, heads, _, rngs = note_paragraphs(lines)
+    parts = []
+    if len(paras) >= 6:
+        rated = rate_paragraphs(path, paras, title)
+        w = [max(ev - 1, 0) for ev, _ in rated]
+        total = sum(w)
+        if total > 1.5 * PART_WEIGHT:
+            parts = _cut(lines, paras, heads, rngs, rated, w, total, title)
+    cache[rel] = {"sha": sha, "v": PART_WEIGHT, "parts": parts}
+    tmp = "%s.%d.tmp" % (cf, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False)
+    os.replace(tmp, cf)
+    return parts
+
+
+def _cut(lines, paras, heads, rngs, rated, w, total, title):
+    n = len(paras)
+    head_at = {}                                    # paragraph j -> the first heading between j-1 and j
+    hi = 0
+    for j, p in enumerate(paras):
+        while hi < len(heads) and heads[hi][0] < p["line"]:
+            if j > 0 and heads[hi][0] > paras[j - 1]["line"]:
+                head_at.setdefault(j, heads[hi])
+            hi += 1
+    depth = shift_depths(paras)
+    want = math.ceil(total / PART_WEIGHT) * 6
+    shifts = sorted((j for j in range(1, n) if depth[j] > 0 and depth[j] >= depth[j - 1] and
+                     (j + 1 >= n or depth[j] >= depth[j + 1])), key=lambda j: -depth[j])[:want]
+    cands = sorted(set(head_at) | set(shifts))
+    # Jev: does a new chapter or topic begin here? (answers kept by the text on both sides)
+    cf = os.path.join(wiki.DATA, "part_bounds.json")
+    try:
+        known = json.load(open(cf, encoding="utf-8"))
+    except (OSError, ValueError):
+        known = {}
+
+    def state(j):
+        before = "\n".join(p["text"][:500] for p in paras[max(0, j - 2):j])
+        nxt = ((head_at[j][1] + "\n") if j in head_at else "") + paras[j]["text"][:800]
+        return {"note": title, "before": before, "next": nxt}
+    key = lambda j: hashlib.sha1(json.dumps(state(j), ensure_ascii=False).encode("utf-8")).hexdigest()[:16]  # noqa: E731
+    todo = [j for j in cands if key(j) not in known]
+    for j, a in ask_all(todo, lambda j: (state(j), {"shift": BOUND_Q})):
+        if a:
+            probs = {int(k): float(v) for k, v in a["shift"]["probabilities"].items()}
+            known[key(j)] = round(sum(k * v for k, v in probs.items()), 3)
+    if todo:
+        tmp = "%s.%d.tmp" % (cf, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(known, f)
+        os.replace(tmp, cf)
+    strength = {j: known[key(j)] for j in cands if key(j) in known}
+    # the best set of cuts: strong boundaries (a new chapter scores most), each part near one chapter's worth
+    pre = [0.0]
+    for x in w:
+        pre.append(pre[-1] + x)
+    pts = [0] + sorted(strength) + [n]
+    pen = lambda a, b: 4 * math.log(max(pre[b] - pre[a], PART_WEIGHT / 20) / PART_WEIGHT) ** 2  # noqa: E731
+    best, back = {0: 0.0}, {}
+    for bi in range(1, len(pts)):
+        b = pts[bi]
+        for ai in range(bi - 1, -1, -1):
+            a = pts[ai]
+            if pre[b] - pre[a] > 4 * PART_WEIGHT:
+                break
+            if a not in best:
+                continue
+            sc = best[a] - pen(a, b) + ((strength[a] - 1.5) if a else 0)
+            if b not in best or sc > best[b]:
+                best[b], back[b] = sc, a
+    if n not in best:
+        return []
+    cuts, b = [], n
+    while b:
+        a = back[b]
+        if a:
+            cuts.append(a)
+        b = a
+    cuts.sort()
+    if not cuts:
+        return []
+    body_start = rngs[0][0] + 1
+    body_end = rngs[0][1]
+    starts = [body_start] + [((head_at[j][0] if j in head_at else paras[j]["line"]) + 1) for j in cuts]   # 1-based
+    firsts = [0] + cuts
+    out = []
+    for k, st in enumerate(starts):
+        en = (starts[k + 1] - 1) if k + 1 < len(starts) else body_end
+        j0 = firsts[k]
+        j1 = cuts[k] if k < len(cuts) else n
+        if j0 in head_at or (k == 0 and heads and heads[0][0] < paras[0]["line"] + 1):
+            name = (head_at.get(j0) or heads[0])[1]
+        else:
+            top = max(range(j0, j1), key=lambda i: rated[i][0])
+            sent = re.sub(r"\s+", " ", rated[top][1]).strip()
+            name = sent[:28] + ("…" if len(sent) > 28 else "")
+        out.append((name, st, en))
+    return out
 
 
 def cmd_skim(args):
@@ -1320,7 +1498,7 @@ def cmd_check_source(args):
         sys.exit("jev: raw/journal/ is not sent to Jev")
     files = sorted(os.path.join(sp, f) for f in os.listdir(full) if f.endswith(".md")) if os.path.isdir(full) else [sp]
     if not os.path.isfile(os.path.join(wiki.VAULT, files[0])):
-        sys.exit("jev: source_path %r is not a raw note" % sp)
+        sys.exit("jev: source_path %r is not a note" % sp)
     _, body, _ = wiki.parse_frontmatter(p.text)
     summary = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", body).replace("[[", "").replace("]]", "")[:30000]
     parts = []                                  # (file, first line, last line, text)
@@ -1368,7 +1546,7 @@ def cmd_check_source(args):
         print("  (%d more parts have a substantive point the page leaves out; fine for a summary)" % some)
     bad = [(b, a) for b, a in sups if a and (noul(a, "supported") <= NO or noul(a, "figures") <= NO)]
     unsure = [(b, a) for b, a in sups if a and (b, a) not in bad and noul(a, "supported") < YES]
-    print("\nbullets the raw note doesn't back (check against the note and fix):")
+    print("\nbullets the note doesn't back (check against the note and fix):")
     for b, a in bad:
         why = "names/numbers differ" if noul(a, "figures") <= NO else "not in the source"
         print("  %.2f/%.2f  %s — %s" % (noul(a, "supported"), noul(a, "figures"), why, b[:160]))
@@ -1473,8 +1651,8 @@ def cmd_prep(args):
     items = [("map (wiki.py outline)", wiki.cmd_outline, ns(file=rel, hits=False, skim=False, lines=part))]
     if wiki.scan_images(read(path)):
         items.append(("web images", cmd_images, ns(file=rel)))
-    items += [("pages the note mentions", cmd_hits, ns(file=rel, max=args.max)),
-              ("new terms", cmd_terms, ns(file=rel, max=args.max)),
+    items += [("pages the note mentions" + (" (this part)" if part else ""), cmd_hits, ns(file=rel, max=args.max, lines=part)),
+              ("new terms" + (" (this part)" if part else ""), cmd_terms, ns(file=rel, max=args.max, lines=part)),
               ("not_aliases phrases", cmd_phrases, ns(file=rel))]
     tail = None
     if total > wiki.READ_WHOLE:
@@ -1483,10 +1661,12 @@ def cmd_prep(args):
             sk = wiki.est_tokens("\n".join(read(path).split("\n")[int(a) - 1:int(b or 10 ** 9)])) * wiki.SKIM_RATIO
         else:
             sk = wiki.est_tokens(read(path)) * wiki.SKIM_RATIO
-        if sk <= wiki.READ_BUDGET:
+        if getattr(args, "no_skim", False):
+            pass                                # the caller hands over the key passages themselves
+        elif sk <= wiki.READ_BUDGET:
             items.append(("skim (Jev)", cmd_skim, ns(file=rel, lines=part)))
         else:
-            tail = "\n(skim: VERY LONG note; pick sections from the map and run `jev.py skim %s --lines A-B`)" % rel
+            tail = "\n(skim: a very long note; pick sections from the map and skim them with `lines`: %s)" % rel
     sections_at_once(items)
     if tail:
         print(tail)
@@ -1508,7 +1688,7 @@ def cmd_lint(args):
     section("aliases", cmd_aliases, ns(pages=[], all=args.all, redo=False))
     section("missing links", cmd_links, ns(apply=True, redo=False, all_checks=args.all, show=0))
     section("contradictions", cmd_contradictions, ns(all=args.all, redo=False))
-    section("not_aliases phrases across raw/", cmd_phrases, ns(file=None, all=args.all, redo=False))
+    section("not_aliases phrases across the notes", cmd_phrases, ns(file=None, all=args.all, redo=False))
 
 
 # -------------------------------------------------------------- query
@@ -1537,15 +1717,18 @@ def query_keywords(q, pages):
     1494; not AI) and Chinese strings rare in the wiki and in Chinese raw notes (康有為; not 什麼)."""
     s = wiki.zh(q)
     keys = []
-    bodies = None
-    for w in dict.fromkeys(re.findall(r"[A-Za-z0-9][A-Za-z0-9.\-]*[A-Za-z0-9]|[0-9]", s)):
-        if len(w) < 2 and not w.isdigit():
-            continue
-        if bodies is None:
-            bodies = [p.text.lower() for p in pages]
-        rx = re.compile(r"(?<![a-z0-9])" + re.escape(w.lower()) + r"(?![a-z0-9])")
-        if sum(1 for b in bodies if rx.search(b)) <= LATIN_RARE * len(pages):
-            keys.append(w)
+    words = [w for w in dict.fromkeys(re.findall(r"[A-Za-z0-9][A-Za-z0-9.\-]*[A-Za-z0-9]|[0-9]", s))
+             if len(w) >= 2 or w.isdigit()]
+    if words:
+        # each page's words once (whole tokens and their pieces between dots and hyphens), then a count per word:
+        # one pass over the wiki instead of a regex search per word and page (16 s for a paragraph-long question)
+        df = Counter()
+        want = {w.lower() for w in words}
+        for p in pages:
+            toks = set(re.findall(r"[a-z0-9][a-z0-9.\-]*[a-z0-9]|[0-9]", p.text.lower()))
+            toks |= {x for t in toks if "." in t or "-" in t for x in re.split(r"[.\-]", t) if x}
+            df.update(toks & want)
+        keys = [w for w in words if df[w.lower()] <= LATIN_RARE * len(pages)]
     rare = {g for g, share in wiki.zh_keywords().items() if share < wiki.ZH_RARE_RAW}
     for run in wiki.CJK_RUN.findall(s):
         i = 0
@@ -1590,8 +1773,8 @@ def cmd_query(args):
     listed = {p.name for _, p in top}
     # search_pages splits 康有为 into 康, 有, 为…: keep only pages that contain a keyword as written
     rxs = [name_rx(wiki.zh(k)) for k in keys]
-    hits = [p for _, p in wiki.search_pages(" ".join(keys), pages)
-            if any(rx.search(wiki.zh(p.text)) for rx in rxs)][:args.bm25]
+    hits = list(itertools.islice((p for _, p in wiki.search_pages(" ".join(keys), pages)
+                                  if (lambda zt: any(rx.search(zt) for rx in rxs))(wiki.zh(p.text))), args.bm25))
     new = [p for p in hits if p.name not in listed]
     print("\n[bm25] keywords: %s — top %d, %d already listed above%s" % (
         ", ".join(keys), len(hits), len(hits) - len(new), "" if new else "."))

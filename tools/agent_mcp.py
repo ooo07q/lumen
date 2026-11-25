@@ -46,12 +46,26 @@ def part_of(rel):
 MAX_OUT = 60000
 
 
+_PRIV = {}
+
+
 def private_pages():
-    """Wiki pages drawn from the journal: (titles, rels)."""
-    pages = [p for p in wiki.load_pages() if p.name not in wiki.SPECIAL]     # index, log: not drawn from anything
-    ok = {p.name for p in jev.query_pages()}
-    priv = [p for p in pages if p.name not in ok]
-    return {p.name for p in priv}, {p.rel for p in priv}
+    """Wiki pages drawn from the journal: (titles, rels). Kept until a wiki page changes (every read of a wiki page
+    asks: loading every page each time cost ~0.8 s a read)."""
+    n, newest = 0, 0.0
+    for root, dirs, files in os.walk(wiki.WIKI):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for f in files:
+            if f.endswith(".md"):
+                n += 1
+                newest = max(newest, os.stat(os.path.join(root, f)).st_mtime)
+    sig = (n, newest)
+    if _PRIV.get("sig") != sig:
+        allp = [p for p in wiki.load_pages() if p.name not in wiki.SPECIAL]     # index, log: not drawn from anything
+        ok = {p.name for p in jev.query_pages()}
+        priv = [p for p in allp if p.name not in ok]
+        _PRIV.update(sig=sig, v=({p.name for p in priv}, {p.rel for p in priv}))
+    return _PRIV["v"]
 
 
 def scrub(text):
@@ -116,7 +130,7 @@ def t_outline(a):
 
 def t_prep(a):
     rel = note_file(a["file"])
-    return run(jev.cmd_prep, file=os.path.join(wiki.VAULT, rel), max=40, lines=part_of(rel))
+    return run(jev.cmd_prep, file=os.path.join(wiki.VAULT, rel), max=40, lines=part_of(rel), no_skim=bool(a.get("no_skim")))
 
 
 def t_skim(a):
@@ -153,14 +167,16 @@ def t_read(a):
             raise ValueError("this run covers lines %s of the note only (one part of a long note)" % part)
         start = max(start, pa)
         end = min(end if b0.strip().isdigit() else pb, pb)
-    keep, note = None, ""
+    keep, note, pointers = None, "", {}
     if not rel.startswith("wiki" + os.sep) and not WHOLE and wiki.est_tokens("\n".join(lines)) > wiki.READ_WHOLE:
         # a long note: its key passages, the paragraphs Jev rates as carrying ~80% of its key points, and headings
         try:
             keep, st = jev.key_lines(full, part=part)
             note = ("(you get the note's key passages — the paragraphs Jev rates as carrying %d%% of its key "
-                    "points, %d of %d paragraphs — and its headings; the rest is left out)\n"
+                    "points, %d of %d paragraphs — and its headings; where substantive paragraphs are left out, "
+                    "their main sentences stand in, marked ›; read those lines if you need one)\n"
                     % (round(st["coverage"] * 100), st["kept"], st["paragraphs"]))
+            pointers = st.get("pointers") or {}
         except Exception as e:                       # Jev off or failing: the note as it is
             note = "(Jev couldn't pick the key passages (%s): the lines as they are)\n" % str(e)[:120]
     if keep is None:
@@ -172,6 +188,9 @@ def t_read(a):
             if any(len(lines[j - 1].strip()) >= 40 for j in gap):     # a real passage, not page furniture
                 rows.append("     …\t(lines %d–%d left out)" % (gap[0], gap[-1]) if len(gap) > 1
                             else "     …\t(line %d left out)" % gap[0])
+                for j in gap:
+                    if (j - 1) in pointers:
+                        rows.append("%6d\t› %s" % (j, pointers[j - 1]))
             gap.clear()
         for i in range(start, end + 1):
             if (i - 1) in keep:
@@ -335,7 +354,7 @@ TOOLS = [
      "'- updated: …', '- notes: …' lines.",
      S({"entry": STR}, ["entry"])),
     ("check_source", "act lean", True, t_check_source,
-     "After writing a source page: the raw note's parts whose main point the page leaves out, and the page's "
+     "After writing a source page: the note's parts whose main point the page leaves out, and the page's "
      "bullets the note doesn't back (names, numbers). A filter: read the passages it names, then fix the page.",
      S({"title": STR}, ["title"])),
     ("cite", "act lean", False, t_cite,

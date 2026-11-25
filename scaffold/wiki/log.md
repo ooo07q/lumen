@@ -1,4 +1,4 @@
 # Log
 
 ## [{{today}}] setup | {{vault}} created
-- notes: new vault from the notes app
+- notes: new vault from Lumen

@@ -36,9 +36,9 @@ NOT_NOTES = {"wiki", "tools", "templates"}       # top-level folders that aren't
 NOT_NOTE_FILES = {"CLAUDE.md", "AGENTS.md"}       # top-level instructions for an agent, not notes
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))    # these scripts and their fixed data (t2s_chars.json)
 # Caches and per-vault data (triage.json, links.json, …): $NOTES_DATA, else the vault's tools/ if it has
-# one, else the vault's hidden .notesapp/.
+# one, else the vault's hidden .lumen/.
 DATA = os.path.abspath(os.environ.get("NOTES_DATA") or (os.path.join(VAULT, "tools") if os.path.isdir(os.path.join(VAULT, "tools"))
-                                                        else os.path.join(VAULT, ".notesapp")))
+                                                        else os.path.join(VAULT, ".lumen")))
 
 
 def _journal():
@@ -73,10 +73,54 @@ def in_notes(rel):
     return not (RAW == VAULT and (parts[0] in NOT_NOTES or (len(parts) == 1 and parts[0] in NOT_NOTE_FILES)))
 
 
+_BOOKS = {}
+
+
+def book_folder(d):
+    """Is folder d (absolute) one book, a note per chapter? A converted book has an index note named after its
+    folder that lists the chapters (`chapters:` in its frontmatter, or a `## Chapters` list)."""
+    try:
+        stamp = os.stat(d).st_mtime
+    except OSError:
+        return False
+    if _BOOKS.get(d, (None,))[0] != stamp:
+        idx = os.path.join(d, os.path.basename(d) + ".md")
+        ok = False
+        try:
+            head = open(idx, encoding="utf-8", errors="replace").read(4000)
+            ok = bool(re.search(r"(?m)^chapters:\s*\d|^## Chapters\s*$", head))
+        except OSError:
+            pass
+        _BOOKS[d] = (stamp, ok)
+    return _BOOKS[d][1]
+
+
+def is_book_unit(rel):
+    """A folder that is one ingest unit (a book), as unit_of sees it."""
+    full = os.path.join(VAULT, rel)
+    if not os.path.isdir(full):
+        return False
+    if RAW != VAULT:
+        return os.path.dirname(full) == RAW
+    return book_folder(full)
+
+
 def unit_of(rel):
-    """triage's unit for a note: the note itself at the top of the notes, else its top-level folder (a book)."""
-    p = os.path.relpath(os.path.join(VAULT, rel), RAW).split(os.sep)
-    return rel if len(p) == 1 else os.path.join(RAW_REL, p[0])
+    """triage's unit for a note: a book (its folder) or the note itself. In a vault with a raw/ folder (the
+    original layout), every top-level folder of raw/ is a book; elsewhere the notes are the user's own folders,
+    so only a folder that is a converted book (book_folder) counts as one, and every other note is its own unit."""
+    full = os.path.join(VAULT, rel)
+    p = os.path.relpath(full, RAW).split(os.sep)
+    if len(p) == 1:
+        return rel
+    if RAW != VAULT:
+        return os.path.join(RAW_REL, p[0])
+    d = os.path.dirname(full)
+    while d != RAW and d.startswith(RAW + os.sep):
+        if book_folder(d):
+            return os.path.relpath(d, VAULT)
+        d = os.path.dirname(d)
+    return rel
 SPECIAL = {"index", "log"}
 TYPES = {"source", "entity", "concept", "analysis", "overview"}
 TYPE_DIRS = {"sources": "source", "entities": "entity", "concepts": "concept", "analyses": "analysis"}
@@ -238,7 +282,22 @@ def processed_paths(pages):
     return done
 
 
-PDF_DIR = os.path.join(RAW, "assets")          # PDFs anywhere under raw/assets/, in any subfolder
+def attachment_folder():
+    """Where attachments go: Obsidian's "attachment folder" setting when it names a folder inside the notes, else
+    <notes>/assets/. PDFs are looked for in both (the app puts dropped files in the first)."""
+    try:
+        f = json.load(open(os.path.join(VAULT, ".obsidian", "app.json"), encoding="utf-8")).get("attachmentFolderPath")
+    except (OSError, ValueError, AttributeError):
+        f = None
+    if isinstance(f, str) and f and not f.startswith(".") and f.strip("/ "):
+        full = os.path.normpath(os.path.join(VAULT, f.strip("/ ")))
+        if full == RAW or full.startswith(RAW + os.sep):
+            return full
+    return os.path.join(RAW, "assets")
+
+
+PDF_DIRS = sorted({os.path.join(RAW, "assets"), attachment_folder()})   # PDFs anywhere under these, any subfolder
+PDF_DIRS = [d for d in PDF_DIRS if not any(d.startswith(o + os.sep) for o in PDF_DIRS)]
 PDF2RAW_SKIPPED = os.path.join(DATA, ".pdf2raw_skipped.json")
 
 
@@ -262,7 +321,7 @@ def waiting_pdfs():
     except (OSError, ValueError):
         skipped = {}
     todo, failed = [], []
-    for root, dirs, files in os.walk(PDF_DIR):
+    for root, dirs, files in (w for d in PDF_DIRS for w in os.walk(d)):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         for fn in sorted(files):
             if not fn.lower().endswith(".pdf"):
@@ -279,16 +338,16 @@ def waiting_pdfs():
 
 
 def convert_pdfs():
-    """Convert new PDFs under raw/assets/ into raw notes (tools/pdf2raw.py, run through uv)."""
+    """Convert new PDFs in the attachment folders into notes (tools/pdf2raw.py, run through uv)."""
     todo, _ = waiting_pdfs()
     if not todo:
         return
     uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
     if not os.path.exists(uv):
-        print("%d new PDF(s) in raw/assets/ not converted: uv is not installed "
+        print("%d new PDF(s) not converted: uv is not installed "
               "(https://docs.astral.sh/uv/)\n" % len(todo))
         return
-    print("Converting %d new PDF(s) from raw/assets/:" % len(todo))
+    print("Converting %d new PDF(s):" % len(todo))
     sys.stdout.flush()
     r = subprocess.run([uv, "run", "--quiet", "--no-project", "--with", "pymupdf4llm>=2.1,<3"] +
                        (["--with", "pyobjc-framework-Vision", "--with", "numpy", "--with", "pillow"] if sys.platform == "darwin" else []) + ["python",
@@ -800,9 +859,9 @@ def cmd_outline(args):
     # ~SKIM_RATIO of the text (it took ~25 s on a 300 KB book, for one number)
     if total > READ_WHOLE:
         sk_all = est_tokens("\n".join(sk)) if args.skim else int(total * SKIM_RATIO)
-        mode = ("LONG: skim it whole (~%d tokens), then read the key parts in full" % sk_all
+        mode = ("key passages: `read` gives the paragraphs that carry the note's key points (skim ~%d tokens)" % sk_all
                 if sk_all <= READ_BUDGET else
-                "VERY LONG: its skim is ~%d tokens; pick sections (headings, --hits) to skim, up to ~%d"
+                "very long: its skim is ~%d tokens; pick sections (headings, hits) to skim, up to ~%d"
                 % (sk_all, READ_BUDGET))
     else:
         mode = "short: read it whole"
@@ -1086,7 +1145,7 @@ def cmd_lint(args):
     done = processed_paths(pages)
     pending = [r for r in raw_files() if os.path.normpath(r) not in done]
     if pending:
-        warnings.append("%d unprocessed raw files (listed by `wiki.py status`, ranked by `jev.py triage`)" % len(pending))
+        warnings.append("%d notes not organised yet" % len(pending))
     todo, failed = waiting_pdfs()
     for r in todo:
         warnings.append("PDF not converted yet (run status): %s" % r)
@@ -1401,7 +1460,7 @@ def cmd_images(args):
     rel = os.path.relpath(path, VAULT)
     in_vault = not rel.startswith("..")
     if not path.endswith(".md") or (in_vault and not in_notes(rel)):
-        sys.exit("images: give a raw/ note")
+        sys.exit("images: give a note")
     text = open(path, encoding="utf-8").read()
     items = scan_images(text)
     skip, take = parse_nums(args.skip), parse_nums(args.take)
@@ -1637,7 +1696,7 @@ def cmd_essay_source(args):
         r = r[:-3] if r.endswith(".md") else r
         if not r.startswith("raw/") or not (os.path.exists(os.path.join(VAULT, r + ".md"))
                                             or os.path.isdir(os.path.join(VAULT, r))):
-            sys.exit("wiki: %r is not a raw note or folder" % r)
+            sys.exit("wiki: %r is not a note or folder" % r)
         new = add_to_fm_list(text, "source", "[[%s]]" % r)
         out.append(("added" if new != text else "already listed") + ": [[%s]]" % r)
         text = new

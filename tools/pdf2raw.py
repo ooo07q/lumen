@@ -44,8 +44,23 @@ VAULT = os.path.abspath(os.path.expanduser(os.environ.get("NOTES_VAULT")
                                            or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 RAW = os.path.join(VAULT, "raw") if os.path.isdir(os.path.join(VAULT, "raw")) else VAULT    # as wiki.py
 DATA = os.path.abspath(os.environ.get("NOTES_DATA") or (os.path.join(VAULT, "tools") if os.path.isdir(os.path.join(VAULT, "tools"))
-                                                        else os.path.join(VAULT, ".notesapp")))
-PDF_DIR = os.path.join(RAW, "assets")          # PDFs anywhere under raw/assets/, in any subfolder
+                                                        else os.path.join(VAULT, ".lumen")))
+def attachment_folder():
+    """Where attachments go: Obsidian's "attachment folder" setting when it names a folder inside the notes, else
+    <notes>/assets/. PDFs are looked for in both (the app puts dropped files in the first)."""
+    try:
+        f = json.load(open(os.path.join(VAULT, ".obsidian", "app.json"), encoding="utf-8")).get("attachmentFolderPath")
+    except (OSError, ValueError, AttributeError):
+        f = None
+    if isinstance(f, str) and f and not f.startswith(".") and f.strip("/ "):
+        full = os.path.normpath(os.path.join(VAULT, f.strip("/ ")))
+        if full == RAW or full.startswith(RAW + os.sep):
+            return full
+    return os.path.join(RAW, "assets")
+
+
+PDF_DIRS = sorted({os.path.join(RAW, "assets"), attachment_folder()})   # PDFs anywhere under these, any subfolder
+PDF_DIRS = [d for d in PDF_DIRS if not any(d.startswith(o + os.sep) for o in PDF_DIRS)]
 IMG_DIR = os.path.join(RAW, "assets")          # figures: raw/assets/<note title>/
 TODAY = datetime.date.today().isoformat()
 SKIPPED = os.path.join(DATA, ".pdf2raw_skipped.json")   # PDFs that could not be converted
@@ -535,7 +550,7 @@ def relink_wiki(meta, new_rel, dry):
 
 def rename_pdf(pdf, name, dry, out_dir):
     """Rename a PDF under raw/assets/ to `name`.pdf (never overwriting); return its new path."""
-    if dry or out_dir or not os.path.abspath(pdf).startswith(PDF_DIR + os.sep):
+    if dry or out_dir or not any(os.path.abspath(pdf).startswith(d + os.sep) for d in PDF_DIRS):
         return pdf
     if os.path.splitext(os.path.basename(pdf))[0] == name:
         return pdf
@@ -683,7 +698,7 @@ def run(out):
         IMG_DIR = os.path.join(os.path.abspath(a.out_dir), "images")
     done = converted_pdfs()
     todo = [os.path.abspath(p) for p in a.pdfs] or sorted(
-        p for p in glob.glob(os.path.join(PDF_DIR, "**", "*.pdf"), recursive=True)
+        p for d in PDF_DIRS for p in glob.glob(os.path.join(d, "**", "*.pdf"), recursive=True)
         if os.path.relpath(p, VAULT) not in done
         and skipped().get(os.path.relpath(p, VAULT), {}).get("mtime") != os.path.getmtime(p))
     if not todo:

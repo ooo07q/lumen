@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Notes app (local prototype): three columns (notes | note tabs | links & suggestions) on a folder of
+"""Lumen (local prototype): three columns (notes | note tabs | links & suggestions) on a folder of
 Markdown notes. Stdlib only.
 
   python3 server.py [--vault PATH] [--port 8765] [--read-only] [--open]
@@ -12,7 +12,7 @@ pages), templates/ and hidden folders. The app writes notes only on the user's a
 attachments, new, rename, move, delete); never wiki/. The journal is never sent to Jev.
 
 App data (vault list, settings, access key, per-vault state) lives in the app data folder
-(~/Library/Application Support/NotesApp on macOS), never next to the code.
+(~/Library/Application Support/Lumen on macOS), never next to the code.
 """
 import argparse
 import hashlib
@@ -21,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -49,12 +50,16 @@ ARGS = ap.parse_args()
 def app_dir():
     if os.environ.get("NOTES_APP_DIR"):                # tests: a separate data folder
         d = os.environ["NOTES_APP_DIR"]
-    elif sys.platform == "darwin":
-        d = os.path.expanduser("~/Library/Application Support/NotesApp")
-    elif os.name == "nt":
-        d = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "NotesApp")
     else:
-        d = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "NotesApp")
+        if sys.platform == "darwin":
+            base = os.path.expanduser("~/Library/Application Support")
+        elif os.name == "nt":
+            base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        else:
+            base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        d, old = os.path.join(base, "Lumen"), os.path.join(base, "NotesApp")
+        if not os.path.exists(d) and os.path.isdir(old):   # the app's earlier name: settings and logins come along
+            os.rename(old, d)
     os.makedirs(os.path.join(d, "vaults"), exist_ok=True)
     return d
 
@@ -240,20 +245,6 @@ def zh_keywords_nowait():
         return {}
 
 
-def attachment_folder():
-    """Where new attachments go: Obsidian's "attachment folder" setting when it names a folder inside the
-    notes, else <notes>/assets/."""
-    try:
-        f = json.load(open(os.path.join(VAULT, ".obsidian", "app.json"), encoding="utf-8")).get("attachmentFolderPath")
-    except (OSError, ValueError, AttributeError):
-        f = None
-    if f and not f.startswith(".") and f.strip("/ "):
-        full = os.path.normpath(os.path.join(VAULT, f.strip("/ ")))
-        if full == wiki.RAW or full.startswith(wiki.RAW + os.sep):
-            return full
-    return os.path.join(wiki.RAW, "assets")
-
-
 def open_vault(path):
     """Point the app (and its tools) at another folder. Reloading the tools resets their paths."""
     global VAULT, wiki, jev, V, STORE, PROTECTED, READ_ONLY, RO_ERR, ASSETS, ATTACH_DIR, TRASH, HISTORY
@@ -282,15 +273,19 @@ def open_vault(path):
         RO_ERR = ("這是受保護的筆記庫，只能看不能改" if PROTECTED
                   else "唯讀模式（用 --read-only 啟動），不能改")
         ASSETS = os.path.join(wiki.RAW, "assets")        # the attachments folder (the 附件 section; no notes in it)
-        ATTACH_DIR = attachment_folder()                   # where new attachments go (Obsidian's setting)
+        ATTACH_DIR = wiki.attachment_folder()              # where new attachments go (Obsidian's setting)
         TRASH = os.path.join(VAULT, ".trash")                       # Obsidian's own trash folder
-        HISTORY = os.path.join(VAULT, ".notesapp", "history")       # earlier versions of saved notes
+        if not READ_ONLY and os.path.isdir(os.path.join(VAULT, ".notesapp")) and not os.path.exists(os.path.join(VAULT, ".lumen")):
+            os.rename(os.path.join(VAULT, ".notesapp"), os.path.join(VAULT, ".lumen"))   # the app's earlier name
+        HISTORY = os.path.join(VAULT, ".lumen", "history")          # earlier versions of saved notes
         STORE = Store(os.path.join(APP, "vaults", vid + ".json"))
         _MENTIONS.clear()
         _REFS.clear()
         V = Vault()
         V.fresh()
         threading.Thread(target=attachment_refs, daemon=True).start()   # warm the link cache (rename, 附件)
+        _BG["last"] = 0.0
+        threading.Timer(3, background_tidy, kwargs={"force": True}).start()   # new PDFs, notes to rank
         zh_keywords_nowait()                                              # and the Chinese keyword table (search)
         s = load_settings()
         s["vaults"] = [{"path": path, "opened": time.strftime("%Y-%m-%d %H:%M")}] + \
@@ -324,6 +319,17 @@ class Vault:
         self.lock = threading.Lock()
         self.sig = None
 
+    @property
+    def triage(self):
+        """triage.json, reread whenever the background ranking (background_tidy) rewrites it."""
+        try:
+            m = os.stat(os.path.join(wiki.DATA, "triage.json")).st_mtime
+        except OSError:
+            return {}
+        if getattr(self, "_tri_m", None) != m:
+            self._tri, self._tri_m = load_json("triage.json"), m
+        return self._tri
+
     def fresh(self):
         sig = wiki_signature()
         with self.lock:
@@ -356,6 +362,8 @@ class Vault:
                 v = os.path.normpath(str(v).strip().strip("[]"))
                 full = os.path.join(VAULT, v)
                 if os.path.isdir(full):
+                    if not wiki.is_book_unit(v):      # an ordinary folder: its notes each need their own page
+                        continue
                     for root, _, files in os.walk(full):
                         for f in files:
                             self.source_of.setdefault(os.path.relpath(os.path.join(root, f), VAULT), p.name)
@@ -369,7 +377,6 @@ class Vault:
                     self.inbound.setdefault(t, set()).add(p.name)
         self.links_cache = load_json("links.json")
         self.contra = load_json("contradictions.json")
-        self.triage = load_json("triage.json")
         self.digest = {p.name: hashlib.sha1(jev.contra_text(p).encode()).hexdigest()[:12]
                        for p in self.pages if p.type == "source"}
         self.images = attachment_map()
@@ -589,10 +596,14 @@ def api_tree(q):
     v = V.fresh()
     v.images = attachment_map()          # attachments added in Finder or Obsidian show up without a restart
     raw = []
+    prog = part_progress()
     for rel in wiki.raw_files():
         if not rel.endswith(".md"):
             continue
         r = {"path": rel, "done": rel in v.source_of}
+        if rel in prog:                               # organised a part at a time: done when every part is
+            r["parts"] = list(prog[rel])
+            r["done"] = r["done"] and prog[rel][0] >= prog[rel][1]
         if not r["done"]:
             t = v.triage.get(triage_unit(rel))
             if t:
@@ -803,21 +814,76 @@ def api_search(q):
     return 200, {"mode": "bm25", "results": res, "error": error, "seconds": round(time.time() - t0, 1)}
 
 
+_BG = {"running": False, "last": 0.0, "out": ""}
+_BG_LOCK = threading.Lock()
+
+
+def background_tidy(force=False):
+    """In the background: new PDFs in the attachment folders become notes, and with Jev on, Jev ranks the notes
+    waiting to be organised (only those it hasn't judged yet; never the journal). Runs on opening a vault, after a PDF
+    is added, and when the to-do list has notes no one ranked (at most every two minutes)."""
+    if READ_ONLY or not VAULT or os.environ.get("NOTES_NO_BACKGROUND") == "1":     # (tests: off)
+        return
+    with _BG_LOCK:
+        if _BG["running"] or (not force and time.time() - _BG["last"] < 120):
+            return
+        _BG["running"], _BG["last"] = True, time.time()
+    tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
+    cmd = [sys.executable, os.path.join(tools, "jev.py"), "triage"] if has_jev() else \
+          [sys.executable, os.path.join(tools, "wiki.py"), "status", "-n", "0"]
+    env = dict(os.environ)                     # NOTES_VAULT / NOTES_DATA of the vault open now
+
+    def run():
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, env=env)
+            _BG["out"] = ((r.stdout or "") + (r.stderr or ""))[-3000:]
+        except Exception as e:                 # noqa: BLE001 - the list says it couldn't rank; nothing else depends on it
+            _BG["out"] = str(e)
+        finally:
+            _BG["running"] = False
+    threading.Thread(target=run, daemon=True).start()
+
+
 def api_queue(q):
     v = V.fresh()
     rows = []
+    prog = {r: p for r, p in part_progress().items() if p[0] < p[1]}      # long notes with parts still to do
+    allnotes = None
+    for rel, (k, n) in prog.items():
+        if os.path.exists(os.path.join(VAULT, rel)):
+            rows.append({"unit": rel, "decision": "continue a work", "priority": (v.triage.get(rel) or {}).get("priority"),
+                         "files": 1, "parts": [k, n]})
     for unit, t in v.triage.items():
-        if unit in v.source_of:
+        if unit in v.source_of or unit in prog:
             continue
         if not os.path.exists(os.path.join(VAULT, unit)):
             continue
-        if os.path.isdir(os.path.join(VAULT, unit)) and any(r.startswith(unit + os.sep) for r in v.source_of):
-            continue
+        if os.path.isdir(os.path.join(VAULT, unit)):
+            if allnotes is None:
+                allnotes = [r for r in wiki.raw_files() if r.endswith(".md")]
+            notes = [r for r in allnotes if r.startswith(unit + os.sep)]
+            left = [r for r in notes if r not in v.source_of]
+            if not left:                                  # every chapter done
+                continue
+            if len(left) < len(notes):                    # begun: the rest of the book comes first
+                t = dict(t, decision="continue a work", files=len(left))
         rows.append({"unit": unit, "decision": t.get("decision"), "priority": t.get("priority"),
                      "files": t.get("files", 1)})
     order = {"continue a work": 0, "ingest": 1, "check": 2, "duplicate?": 3, "reconvert": 4, "skip (no content)": 5}
     rows.sort(key=lambda r: (order.get(r["decision"], 9), -(r["priority"] or 0)))
-    return 200, {"units": rows, "judged": len(v.triage)}
+    judged = set(v.triage)
+    if any(wiki.unit_of(r) not in judged and r not in v.source_of and not is_private(r)
+           for r in wiki.raw_files() if r.endswith(".md")):
+        background_tidy()
+    try:
+        pdf_todo, pdf_failed = wiki.waiting_pdfs()
+    except Exception:                                  # noqa: BLE001 - the list works without it
+        pdf_todo, pdf_failed = [], []
+    import shutil
+    uv = bool(shutil.which("uv") or os.path.exists(os.path.expanduser("~/.local/bin/uv")))
+    return 200, {"units": rows, "judged": len(v.triage), "ranking": _BG["running"] and has_jev(),
+                 "pdfs": {"waiting": len(pdf_todo), "failed": [f for f, _ in pdf_failed][:20], "uv": uv,
+                          "converting": _BG["running"] and bool(pdf_todo)}}
 
 
 def api_dismiss(body):
@@ -851,7 +917,7 @@ def api_save(body):
 
 
 # ------------------------------------------------------------------ version history
-# Before a save changes a note, its previous text is kept in .notesapp/history/<note path>/<time>.md (a hidden
+# Before a save changes a note, its previous text is kept in .lumen/history/<note path>/<time>.md (a hidden
 # folder Obsidian and the tools ignore). One version per note per HISTORY_GAP: a burst of saves while
 # writing keeps the text from before the burst. At most HISTORY_MAX versions per note.
 
@@ -860,7 +926,7 @@ HISTORY_MAX = 100
 
 
 def write_text(full, text):
-    tmp = full + ".notesapp-tmp"
+    tmp = full + ".lumen-tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
     os.replace(tmp, full)
@@ -910,6 +976,16 @@ def move_history(old_rel, new_rel):
     if os.path.isdir(a) and not os.path.exists(b):
         os.makedirs(os.path.dirname(b), exist_ok=True)
         os.rename(a, b)
+    all_ = _parts_all()                     # and its part-by-part progress (a folder: every note in it)
+    moved = {k: v for k, v in all_.items() if k == old_rel or k.startswith(old_rel + os.sep)}
+    if moved:
+        for k, v in moved.items():
+            del all_[k]
+            all_[new_rel + k[len(old_rel):]] = v
+        tmp = "%s.%d.tmp" % (parts_file(), os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(all_, f, ensure_ascii=False)
+        os.replace(tmp, parts_file())
 
 
 def api_history(q):
@@ -1250,6 +1326,8 @@ def api_import(body):
         with open(full, "wb") as f:
             f.write(data)
     V.images = attachment_map()
+    if final.lower().endswith(".pdf"):
+        background_tidy(force=True)               # a PDF becomes a note to organise
     return 200, {"path": os.path.relpath(full, os.path.realpath(VAULT)), "note": is_note}
 
 
@@ -1314,6 +1392,8 @@ def api_attach(body):
             f.write(data)
     rel = os.path.relpath(full, VAULT)
     V.images.setdefault(final.lower(), rel)
+    if final.lower().endswith(".pdf"):
+        background_tidy(force=True)               # a PDF becomes a note to organise
     return 200, {"name": final, "path": rel, "image": os.path.splitext(final)[1].lower() in IMG_EXT}
 
 
@@ -1374,7 +1454,7 @@ def api_attachments(q):
         if os.path.splitext(rel)[1].lower() in (".html", ".htm"):
             f["note"] = html_note(rel, f["used_by"])
         out.append(f)
-    return 200, {"files": out, "dir": os.path.relpath(ASSETS, VAULT)}
+    return 200, {"files": out, "dir": os.path.relpath(ATTACH_DIR, VAULT)}
 
 
 def api_t2s(q):
@@ -1387,7 +1467,7 @@ def api_t2s(q):
 # command or change anything; no settings, hooks or MCP servers of the user's are loaded, and its working
 # folder is an empty one in the app data folder, so no CLAUDE.md is read. It only writes the answer.
 
-AI_SYSTEM = """你是一個筆記 app 裡的助理，回答使用者關於他自己的筆記和知識庫的問題。
+AI_SYSTEM = """你是筆記 app Lumen 裡的助理，回答使用者關於他自己的筆記和知識庫的問題。
 規則：
 - 只根據使用者訊息裡提供的資料回答。資料裡沒有的，直接說「知識庫裡沒有」，並建議可以補什麼來源。不要編造。
 - 每個事實後面標出處，格式是 [[頁名]]，頁名照資料裡 title 的寫法原樣抄。
@@ -1677,7 +1757,7 @@ def api_ai_ask(body):
     provider = "chatgpt" if body.get("provider") == "chatgpt" else "claude"
     exe = claude_bin()
     if provider == "claude" and (not exe or connect.is_off("claude")):
-        return 400, {"error": "還沒連接 Claude：到「連接 AI」按「連接 Claude」。", "connect": True}
+        return 400, {"error": "還沒連接 Claude Code：到「連接 AI」按「連接 Claude Code」。", "connect": True}
     if provider == "chatgpt" and not connect.gpt_status()["connected"]:
         return 400, {"error": "還沒連接 ChatGPT：到「連接 AI」按「Continue with ChatGPT」。", "connect": True}
     msg, used, ctx_used = ai_prompt(body)
@@ -1725,7 +1805,7 @@ def api_ai_stop(body):
 # ------------------------------------------------------------------ the wiki agent (Claude Code, writes wiki/ only)
 # Two phases in one Claude Code conversation: plan (reads only, ends with a ```plan block the user approves or
 # changes), then act (writes). Limits, enforced by Claude Code's permission rules and the app's own tool server:
-# no shell, no web; Read/Glob/Grep inside the vault except the journal, .notesapp/, .trash/ and pages drawn from
+# no shell, no web; Read/Glob/Grep inside the vault except the journal, .lumen/, .trash/ and pages drawn from
 # the journal; Edit/Write only under wiki/; the app's tools through tools/agent_mcp.py (which refuses the same).
 # Before acting the app copies every wiki page, so afterwards it lists each change, keeps the old text as a
 # version, and can undo the whole run; it also checks that nothing outside wiki/ changed.
@@ -1733,7 +1813,7 @@ def api_ai_stop(body):
 AGENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent")
 AGENT_JOBS = {}
 AGENT_LOCK = threading.Lock()
-SKIP_TOP = {".notesapp", ".trash", ".obsidian", ".git"}
+SKIP_TOP = {".lumen", ".notesapp", ".trash", ".obsidian", ".git"}
 
 
 def wiki_snapshot():
@@ -1769,7 +1849,7 @@ def agent_rules():
     allow = [a("Read"), a("Glob"), a("Grep"), "mcp__notes"]
     write = [a("Edit", "wiki/"), a("Write", "wiki/")]
     deny = []
-    for rel in [wiki.JOURNAL_REL.rstrip("/") + "/", ".notesapp/", ".trash/"]:
+    for rel in [wiki.JOURNAL_REL.rstrip("/") + "/", ".lumen/", ".notesapp/", ".trash/"]:
         deny += [a("Read", rel), a("Glob", rel), a("Grep", rel)]
     vv = V.fresh()
     for p in vv.pages:
@@ -1965,7 +2045,32 @@ def lean_context(job):
     try:
         rel = job["path"]
         parts = []
-        rep_, err = t.call("prep", {"file": rel}) if job["jev"] else t.call("outline", {"file": rel, "hits": True})
+        # the related pages are looked for while prep runs (a second tools process): about half the wait
+        found_box = {}
+        lines0 = open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read().split("\n")
+        pl0 = (job.get("part") or {}).get("lines")
+        if pl0:
+            a0, _, b0 = pl0.partition("-")
+            text0 = "\n".join(lines0[int(a0) - 1:int(b0)])
+        else:
+            text0 = re.sub(r"^---\n.*?\n---\n", "", "\n".join(lines0), flags=re.S)
+        q = "Which wiki pages cover what this %s is about? %s: %s" % (
+            "part of the note" if pl0 else "note", os.path.basename(rel)[:-3], re.sub(r"\s+", " ", text0)[:1500])
+
+        def find_pages():
+            t2 = NotesTools(dict(mcp_env(job, "plan"), NOTES_AGENT_FILES="1"))
+            try:
+                found_box["r"] = t2.call("jev_query", {"question": q, "n": 10}) if job["jev"] else \
+                    t2.call("search", {"query": q[:300], "n": 10})
+            finally:
+                t2.close()
+        finder = threading.Thread(target=find_pages, daemon=True)
+        finder.start()
+        rep_, err = t.call("prep", {"file": rel, "no_skim": not job.get("whole")}) if job["jev"] else \
+            t.call("outline", {"file": rel, "hits": True})
+        if not err and not job.get("whole"):
+            # the skim is each key paragraph's main sentence: the key passages below carry the paragraphs themselves
+            rep_ = re.sub(r"\n=+ skim \(Jev\) =+\n.*?(?=\n=+ |\Z)", "\n", rep_, flags=re.S)
         if not err:
             parts.append("# %s for the note\n\n%s" % ("Jev's prep report" if job["jev"] else "The outline", rep_))
         # the note (api_agent_start checked it is one of the user's notes, not the journal): whole when short;
@@ -1983,24 +2088,29 @@ def lean_context(job):
             try:
                 keep, st = jev.key_lines(os.path.join(VAULT, rel), part=pl)
                 keep = {k for k in keep if k in span}
+                pointers = {k: v for k, v in (st.get("pointers") or {}).items() if k in span}
                 cov = "the paragraphs Jev rates as carrying %d%% of its key points (%d of %d paragraphs) and its " \
-                      "headings" % (round(st["coverage"] * 100), st["kept"], st["paragraphs"])
+                      "headings; where substantive paragraphs are left out, their main sentences stand in, marked " \
+                      "›" % (round(st["coverage"] * 100), st["kept"], st["paragraphs"])
             except Exception:                     # noqa: BLE001 - Jev off or failing: the whole note (or part)
-                keep, cov = set(span), "the whole text (Jev couldn't pick the key passages)"
-            out, last = [], -2
+                keep, cov, pointers = set(span), "the whole text (Jev couldn't pick the key passages)", {}
+            out, last = [], span.start - 1
             for k in sorted(keep):
                 if k != last + 1:
                     out.append("… (lines left out)")
+                    out += ["%6d\t› %s" % (j + 1, pointers[j]) for j in range(last + 1, k) if j in pointers]
                 out.append("%6d\t%s" % (k + 1, lines[k]))
                 last = k
+            if last + 1 < span.stop and any(j in pointers for j in range(last + 1, span.stop)):
+                out.append("… (lines left out)")
+                out += ["%6d\t› %s" % (j + 1, pointers[j]) for j in range(last + 1, span.stop) if j in pointers]
             note = "\n".join(out)
             how = ("its key passages: %s (line-numbered); say on the source page that it was read in key passages"
                    % cov)
         where = (" — part %d of %d, %s, lines %s" % (job["part"]["i"] + 1, job["part"]["n"], job["part"]["name"], pl)) if pl else ""
         parts.append("# The note `%s`%s (~%d tokens; %s)\n\n%s" % (rel, where, total, how, note))
-        body = re.sub(r"^---\n.*?\n---\n", "", open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read(), flags=re.S)
-        q = "Which wiki pages cover what this note is about? %s: %s" % (os.path.basename(rel)[:-3], re.sub(r"\s+", " ", body)[:1500])
-        found, _ = t.call("jev_query", {"question": q, "n": 10}) if job["jev"] else t.call("search", {"query": q[:300], "n": 10})
+        finder.join(timeout=300)
+        found = (found_box.get("r") or ("", None))[0] or ""
         paths = []
         for m in re.finditer(r"(wiki/[^\n]*?\.md)", found):
             if m.group(1) not in paths:
@@ -2051,8 +2161,9 @@ MODE_TEXT = {
            "page with `write`, change part of one with `edit`, add to existing pages with `cite`, take back a page you "
            "created by mistake with `remove`, and add the log entry with `log_append`.",
     "lean": "Tools in this run: none while planning. The app has gathered what you work from, below: the prep "
-            "report on the note (with Jev's skim), the note itself (whole if the user asked for it, else its "
-            "key passages: the paragraphs Jev rates as carrying ~80% of its key points, with its headings), and cards "
+            "report on the note (its map, the pages it mentions, new terms), the note itself (whole if the user asked "
+            "for it, else its key passages: the paragraphs Jev rates as carrying ~80% of its key points, with its "
+            "headings, and the main sentence of each substantive paragraph left out, marked ›), and cards "
             "of the existing wiki pages most related to it (line numbers are not part of the text). Plan from these; "
             "before you write, the app hands over the whole text of every page in \"update\", and of any page you "
             "list in the plan's \"read\" (paths) because you need to see it. In the act phase the app tells you how to write your changes.",
@@ -2063,9 +2174,25 @@ def gpt_error(raw):
     return GPT_LIMIT if "usage_limit" in raw else "ChatGPT 回應錯誤：%s" % raw[:300]
 
 
+_STR = {"type": "string"}
+# One answer format for both phases of a lean ChatGPT run: the format is part of the beginning of every request, so
+# with one format the act request starts exactly as the plan request did and the whole plan exchange is read from
+# the cache (with two formats nothing after the instructions was: the act request paid for all of it again).
 CHANGES_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["pages", "edits", "cite", "log", "report"],
+    "type": "object", "additionalProperties": False,
+    "required": ["message", "plan", "pages", "edits", "cite", "log", "report"],
     "properties": {
+        "message": _STR,
+        "plan": {"type": "object", "additionalProperties": False,
+                 "required": ["summary", "takeaways", "create", "update", "read", "notes"],
+                 "properties": {
+                     "summary": _STR, "takeaways": {"type": "array", "items": _STR},
+                     "create": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                                "required": ["page", "type", "why"],
+                                "properties": {"page": _STR, "type": _STR, "why": _STR}}},
+                     "update": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                                "required": ["page", "why"], "properties": {"page": _STR, "why": _STR}}},
+                     "read": {"type": "array", "items": _STR}, "notes": _STR}},
         "pages": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["path", "content"],
                   "properties": {"path": {"type": "string"}, "content": {"type": "string"}}}},
         "edits": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["path", "old", "new"],
@@ -2075,7 +2202,12 @@ CHANGES_SCHEMA = {
         "log": {"type": "string"},
         "report": {"type": "string"}}}
 
-CHANGES_TEXT = """Now write every change at once, as one JSON object (nothing else):
+PLAN_JSON_TEXT = """Answer as one JSON object (the app reads it): "message", your short message to the user (what you found, a
+few lines, in the user's language); "plan", the plan (summary, takeaways, create, update, notes as described above,
+and "read": paths of pages you need to see whole before writing). In this phase leave the rest empty: "pages" and
+"edits" [], "cite" {"source": "", "blocks": ""}, "log" and "report" ""."""
+
+CHANGES_TEXT = """Now write every change at once, in the same JSON object ("message" "" and "plan" with empty fields now):
 - "pages": new pages, or existing pages replaced whole: {"path": "wiki/<folder>/<Title>.md", "content": the full page
   with frontmatter}. The source page first.
 - "edits": changes inside existing pages: {"path", "old": text copied exactly from the page as given above, once in
@@ -2099,13 +2231,14 @@ def gpt_request(job, conv, effort="medium", schema=None):
     if not token:
         raise RuntimeError("還沒連接 ChatGPT，或登入過期了：到「連接 AI」重新連接。")
     instructions = open(os.path.join(AGENT_DIR, "instructions.md"), encoding="utf-8").read()
+    key = cache_key(job)
     body = {"model": job["model"], "instructions": instructions, "input": conv, "store": False, "stream": True,
-            "prompt_cache_key": job["session"], "reasoning": {"effort": effort}, "text": {"verbosity": "medium"}}
+            "prompt_cache_key": key, "reasoning": {"effort": effort}, "text": {"verbosity": "medium"}}
     if schema:
         body["text"]["format"] = {"type": "json_schema", "name": "changes", "schema": schema, "strict": True}
     req = urllib.request.Request(connect.RESOURCE + "/responses", data=json.dumps(body).encode(), method="POST",
                                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
-                                          "Accept": "text/event-stream", "session_id": job["session"]})
+                                          "Accept": "text/event-stream", "session_id": key})
     try:
         r = urllib.request.urlopen(req, timeout=300, context=connect._ssl())   # a stalled stream fails in 5 min
     except urllib.error.HTTPError as e:
@@ -2142,6 +2275,12 @@ def gpt_request(job, conv, effort="medium", schema=None):
     return text
 
 
+def cache_key(job):
+    """One prompt-cache key for every run on the same note (and model): the instructions every request begins
+    with, and what a note's parts share, are then cached from one run to the next instead of only within a run."""
+    return "notes-" + hashlib.sha1(("%s|%s|%s" % (VAULT, job.get("path") or job["task"], job["model"])).encode("utf-8")).hexdigest()[:20]
+
+
 def gpt_lean_phase(job, phase, message):
     """ChatGPT, lean: two or three requests for a whole ingest instead of one per step. Plan: one request with
     the material the app gathered. Act: the app adds the pages the plan names that it hadn't handed over, asks for
@@ -2150,11 +2289,16 @@ def gpt_lean_phase(job, phase, message):
     job["status"] = "planning" if phase == "plan" else "acting"
     job["text"] = ""
     if phase == "plan":
-        job["conv"].append({"role": "user", "content": [{"type": "input_text", "text": message}]})
+        job["conv"].append({"role": "user", "content": [{"type": "input_text", "text": message + "\n\n" + PLAN_JSON_TEXT}]})
         job["steps"].append({"phase": "plan", "what": "ChatGPT 讀交給它的資料、列計畫", "ok": None})
-        text = gpt_request(job, job["conv"], "medium")
-        job["steps"][-1]["ok"] = bool(text)
-        job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": text}]})
+        out = gpt_request(job, job["conv"], "medium", CHANGES_SCHEMA)
+        job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": out}]})
+        try:
+            ans = json.loads(out)
+            text = str(ans.get("message") or "") + "\n\n```plan\n" + json.dumps(ans.get("plan") or {}, ensure_ascii=False) + "\n```"
+        except ValueError:
+            text = out                            # the plan check below says it isn't a plan
+        job["steps"][-1]["ok"] = bool(out)
         job["text"] = text
         return
     t = NotesTools(dict(mcp_env(job, "act"), NOTES_AGENT_FILES="1"))
@@ -2359,14 +2503,22 @@ def parse_plan(text):
 
 def agent_plan(job):
     with AGENT_LOCK:
+        if job["task"] == "ingest":
+            if job.get("whole"):
+                ingest_task(job)
+            else:
+                choose_part(job)
         msg = agent_facts(job) + "\n" + job["task_text"]
         if job["mode"] in MODE_TEXT:
             msg += "\n\n" + MODE_TEXT[job["mode"]]
         if job["mode"] == "lean":
+            job["steps"].append({"phase": "plan", "what": "準備資料：Jev 的分析、重點段落、相關的頁", "ok": None})
             try:
                 msg += "\n\n" + lean_context(job)
+                job["steps"][-1]["ok"] = True
             except Exception as e:                # noqa: BLE001 - say so and plan without it
                 msg += "\n\n(The app couldn't gather the material: %s)" % e
+                job["steps"][-1]["ok"] = False
         run_agent_phase(job, "plan", msg + "\n\nPhase: plan.")
     if job["stopped"]:
         job["status"] = "stopped"
@@ -2412,19 +2564,109 @@ def parts_file():
     return os.path.join(wiki.DATA, "parts.json")
 
 
-def note_parts(rel):
-    """A long note's parts (chapters, or ~6k-token portions where it has no headings), [] for one run."""
+def note_parts(rel, jev_on=True):
+    """A long note's parts, [] for one run. With Jev: by its key points and meaning (jev.note_parts). Without:
+    its chapter headings, or even portions (wiki.note_parts), since nothing can judge the topics."""
+    if jev_on:
+        return [tuple(x) for x in jev.note_parts(os.path.join(VAULT, rel))]
     lines = open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read().split("\n")
     return wiki.note_parts(lines)
 
 
-def parts_done(rel, parts):
-    """The parts of `rel` already organised (indexes), as long as the note's parts are still the same."""
+def ingest_task(job):
+    """The ingest task's text and label, once the note's parts are known (job["part"] set or not)."""
+    rel, title = job["path"], note_title(job["path"])
+    pt = job.get("part")
+    if pt:
+        pname, a, b = pt["parts"][pt["i"]]
+        job["task_text"] = (
+            "Task: ingest part %d of %d of the note `%s`: %s, lines %d-%d. The note is long, so it is organised a "
+            "part at a time (its parts follow its topics): this run covers only these lines (the tools give you "
+            "only them). Write a source page for this part, titled `%s — %s`, with `source_path` the note and "
+            "`part: \"%d/%d\"` in its frontmatter; it links the other parts' pages where they exist. Update the pages "
+            "this part bears on. The other parts get their own runs."
+            % (pt["i"] + 1, pt["n"], rel, ("\"%s\"" % pname) if pname else "a portion of the text", a, b, title,
+               pname or "Part %d" % (pt["i"] + 1), pt["i"] + 1, pt["n"]))
+        job["label"] = "整理「%s」：%s" % (title, pt["name"])
+        return
+    src = V.fresh().source_of.get(rel)
+    text = "Task: ingest the note `%s`." % rel
+    if job.get("whole"):
+        text += " The user asked for it to be read whole."
+    if src:
+        text += " It already has a source page, [[%s]]: update that page and the pages it touched with " \
+                "what is new or was missed, instead of making another source page." % src
+    job["task_text"], job["label"] = text, "整理「%s」" % title
+
+
+def choose_part(job):
+    """Plan thread, before anything else: is the note organised a part at a time, and which part is this run?"""
+    rel = job["path"]
+    job["steps"].append({"phase": "plan", "what": "判斷這篇要不要分部分整理、從哪裡分" + ("（Jev 看重點和段落主題）" if job["jev"] else ""), "ok": None})
     try:
-        d = json.load(open(parts_file(), encoding="utf-8")).get(rel) or {}
+        parts = note_parts(rel, job["jev"])
+        job["steps"][-1]["ok"] = True
+    except Exception:                                       # noqa: BLE001 - Jev failing: headings or even portions
+        parts = note_parts(rel, False)
+        job["steps"][-1]["ok"] = False
+    if parts:
+        done = parts_done(rel, parts)
+        want = job.get("want_part")
+        i = int(want) if isinstance(want, int) and 0 <= want < len(parts) else \
+            next((k for k in range(len(parts)) if k not in done), 0)
+        job["part"] = {"i": i, "n": len(parts), "lines": "%d-%d" % (parts[i][1], parts[i][2]),
+                       "name": part_name(parts, i), "parts": parts}
+        job["steps"][-1]["what"] = "分成 %d 部分；這次整理第 %d 部分：%s" % (len(parts), i + 1, part_name(parts, i))
+    ingest_task(job)
+
+
+def _parts_all():
+    try:
+        return json.load(open(parts_file(), encoding="utf-8"))
     except (OSError, ValueError):
+        return {}
+
+
+def part_fps(rel, part):
+    """Fingerprints of a part's paragraphs (whitespace folded): what was organised, recognisable after the note is
+    edited and its parts move."""
+    _, a, b = part
+    lines = open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read().split("\n")[a - 1:b]
+    out = []
+    for para in re.split(r"\n\s*\n", "\n".join(lines)):
+        t = re.sub(r"\s+", " ", para).strip()
+        if len(t) >= 20:
+            out.append(hashlib.sha1(t.encode("utf-8")).hexdigest()[:12])
+    return out
+
+
+def parts_done(rel, parts):
+    """The parts of `rel` already organised (indexes). While the parts are the same, as recorded; after the note was
+    edited (its parts recomputed, maybe cut elsewhere), a part counts as done when most of its paragraphs were in
+    a part organised before, so a fixed typo or an added paragraph doesn't lose the progress."""
+    d = _parts_all().get(rel) or {}
+    if d.get("sig") == parts_sig(parts):
+        return set(d.get("done") or [])
+    seen = set(d.get("fp") or [])
+    if not seen:
         return set()
-    return set(d.get("done") or []) if d.get("sig") == parts_sig(parts) else set()
+    done = set()
+    for i, pt in enumerate(parts):
+        fps = part_fps(rel, pt)
+        if fps and sum(f in seen for f in fps) >= 0.6 * len(fps):
+            done.add(i)
+    save_parts(rel, parts, done, seen)
+    return done
+
+
+def save_parts(rel, parts, done, fp):
+    all_ = _parts_all()
+    all_[rel] = {"sig": parts_sig(parts), "done": sorted(done), "n": len(parts), "fp": sorted(fp),
+                 "stamp": note_stamp(rel)}
+    tmp = "%s.%d.tmp" % (parts_file(), os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(all_, f, ensure_ascii=False)
+    os.replace(tmp, parts_file())
 
 
 def parts_sig(parts):
@@ -2432,17 +2674,25 @@ def parts_sig(parts):
 
 
 def mark_part_done(rel, parts, i):
+    done = parts_done(rel, parts) | {i}
+    fp = set((_parts_all().get(rel) or {}).get("fp") or []) | set(part_fps(rel, parts[i]))
+    save_parts(rel, parts, done, fp)
+
+
+def note_stamp(rel):
     try:
-        all_ = json.load(open(parts_file(), encoding="utf-8"))
-    except (OSError, ValueError):
-        all_ = {}
-    d = all_.get(rel) or {}
-    done = set(d.get("done") or []) if d.get("sig") == parts_sig(parts) else set()
-    all_[rel] = {"sig": parts_sig(parts), "done": sorted(done | {i}), "n": len(parts)}
-    tmp = parts_file() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(all_, f, ensure_ascii=False)
-    os.replace(tmp, parts_file())
+        st = os.stat(os.path.join(VAULT, rel))
+        return "%d|%d" % (st.st_size, int(st.st_mtime))
+    except OSError:
+        return ""
+
+
+def part_progress():
+    """{note: (parts done, parts)} for the notes organised a part at a time: the list and the to-do marks show
+    "3/16" until every part is done, instead of "done" after the first part's page. Editing the note keeps its
+    count (the next run recomputes the parts and carries the progress over, parts_done)."""
+    return {rel: (len(d.get("done") or []), int(d.get("n") or 0)) for rel, d in _parts_all().items()
+            if d.get("n") and os.path.exists(os.path.join(VAULT, rel))}
 
 
 def part_name(parts, i):
@@ -2465,7 +2715,7 @@ def api_agent_start(body):
     provider = "chatgpt" if body.get("provider") == "chatgpt" else "claude"
     exe = claude_bin() if provider == "claude" else None
     if provider == "claude" and (not exe or connect.is_off("claude")):
-        return 400, {"error": "還沒連接 Claude：到「連接 AI」按「連接 Claude」。", "connect": True}
+        return 400, {"error": "還沒連接 Claude Code：到「連接 AI」按「連接 Claude Code」。", "connect": True}
     if provider == "chatgpt" and not connect.gpt_status()["connected"]:
         return 400, {"error": "還沒連接 ChatGPT。", "connect": True}
     if any(j["status"] in ("planning", "acting") for j in AGENT_JOBS.values()):
@@ -2478,36 +2728,9 @@ def api_agent_start(body):
             return 400, {"error": "只能整理你自己的筆記"}
         if is_private(rel):
             return 400, {"error": "日記不交給 AI"}
-        title = note_title(rel)
-        src = v.source_of.get(rel)
-        # a long note goes a part at a time (its chapters, or ~6k-token portions): one run per part caught far
-        # more of a book's key points than one run over all of it, for about the same key points per token
-        parts = [] if body.get("whole") else note_parts(rel)
-        part = None
-        if parts:
-            done = parts_done(rel, parts)
-            want = body.get("part")
-            part = int(want) if isinstance(want, int) and 0 <= want < len(parts) else \
-                next((i for i in range(len(parts)) if i not in done), 0)
-        if part is not None:
-            pt, a, b = parts[part]
-            name = part_name(parts, part)
-            text = ("Task: ingest part %d of %d of the note `%s`: %s, lines %d-%d. The note is long, so it is "
-                    "organised a part at a time: this run covers only these lines (the tools give you only them). "
-                    "Write a source page for this part, titled `%s — %s`, with `source_path` the note and "
-                    "`part: \"%d/%d\"` in its frontmatter; it links the other parts' pages where they exist. Update "
-                    "the pages this part bears on. The other parts get their own runs."
-                    % (part + 1, len(parts), rel, ("\"%s\"" % pt) if pt else "a portion of the text", a, b,
-                       title, pt or "Part %d" % (part + 1), part + 1, len(parts)))
-            label = "整理「%s」：%s" % (title, name)
-        else:
-            text = "Task: ingest the note `%s`." % rel
-            if body.get("whole"):
-                text += " The user asked for it to be read whole."
-            if src:
-                text += " It already has a source page, [[%s]]: update that page and the pages it touched with " \
-                        "what is new or was missed, instead of making another source page." % src
-            label = "整理「%s」" % title
+        # the task text and label come once the plan thread knows the note's parts (choose_part): a long note is
+        # organised a part at a time, its parts following its key points and topics (Jev judges them)
+        text, label = "", "整理「%s」" % note_title(rel)
     elif task == "analysis":
         q, answer = str(body.get("q") or "").strip(), str(body.get("answer") or "").strip()
         if not q or not answer:
@@ -2547,9 +2770,8 @@ def api_agent_start(body):
         "undone": False, "vault": VAULT, "ui_lang": ui_lang(body.get("ui_lang")), "provider": provider, "mode": mode,
         "path": rel if task == "ingest" else None, "conv": [], "tokens": {"in": 0, "cached": 0, "out": 0},
         "whole": bool(body.get("whole"))}
-    if task == "ingest" and part is not None:
-        job["part"] = {"i": part, "n": len(parts), "lines": "%d-%d" % (parts[part][1], parts[part][2]),
-                       "name": part_name(parts, part), "parts": parts}
+    if task == "ingest":
+        job["want_part"] = body.get("part")
     threading.Thread(target=agent_plan, args=(job,), daemon=True).start()
     return 200, {"id": jid}
 
@@ -2805,7 +3027,7 @@ POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_s
 # these work with no vault open
 GET_APP = {"/api/vaults": api_vaults, "/api/browse": api_browse}
 POST_APP = {"/api/vault/open": api_vault_open, "/api/vault/create": api_vault_create, "/api/vault/forget": api_vault_forget}
-COOKIE = "notesapp_key"
+COOKIE = "lumen_key"
 
 
 def api_connect_status(q):
@@ -2871,7 +3093,7 @@ class Handler(BaseHTTPRequestHandler):
     def gate(self, path, needs_vault):
         """True if the request may go on; else the reply has been sent."""
         if not self.key_ok():
-            self.send(401, {"error": "請從 app 的啟動連結開啟（網址要帶存取碼）", "nokey": True})
+            self.send(401, {"error": "請從 Lumen 的啟動連結開啟（網址要帶存取碼）", "nokey": True})
             return False
         if path in needs_vault and VAULT is None:
             self.send(409, {"error": "還沒有打開筆記庫", "novault": True})
@@ -2988,7 +3210,7 @@ def main():
         srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     connect.PORT = srv.server_address[1]
     url = "http://127.0.0.1:%d/?k=%s" % (srv.server_address[1], KEY)
-    print("Notes app on %s" % url)
+    print("Lumen on %s" % url)
     print("  vault: %s%s" % (VAULT or "(none yet: the start screen)", ", PROTECTED → READ-ONLY" if PROTECTED
                              else ", READ-ONLY" if READ_ONLY else ""))
     print("  app data: %s" % APP)

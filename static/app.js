@@ -98,8 +98,15 @@ function rowFile(path, label, extra = "", pre = "") {
 }
 // The one to-do marker, used everywhere a raw note is listed: orange = waiting to be organised,
 // grey = Jev found nothing to organise (empty or broken conversion).
+function ingestLabel(path) {
+  const f = (S.tree.raw || []).find(x => x.path === path);
+  return f && f.parts && f.parts[0] > 0 && f.parts[0] < f.parts[1]
+    ? "✦ 接著整理下一部分（已整理 " + f.parts[0] + "/" + f.parts[1] + "）" : "✦ 請 AI 整理這篇";
+}
 function dot(f) {
   if (f.done) return "";
+  if (f.parts && f.parts[0] > 0)                  // a long note organised a part at a time, not finished yet
+    return '<span class="count" title="長篇一次整理一部分：已整理 ' + f.parts[0] + " / " + f.parts[1] + ' 部分"><span class="new"></span>' + f.parts[0] + "/" + f.parts[1] + "</span>";
   const skip = SKIP_DECISIONS.has(f.d);
   return '<span class="new' + (skip ? " skip" : "") + '" title="' + (skip ? "不用整理：" + esc(QUEUE_LABEL[f.d]) : "待整理" + (f.d ? "：Jev 建議「" + esc(QUEUE_LABEL[f.d] || f.d) + "」" : "")) + '"></span>';
 }
@@ -200,13 +207,19 @@ async function renderQueue(el, filter) {
     if (!judged.has(unit)) unranked.set(unit, (unranked.get(unit) || 0) + 1);
   }
   const units = [...q.units, ...[...unranked].map(([unit, files]) => ({ unit, files, decision: "unranked" }))];
-  let html = '<div class="hint">左邊有 <span class="new"></span> 的筆記都在這裡，依 Jev 建議的順序排。整理（寫成來源頁、更新概念頁）要 agent 來做。</div>';
+  let html = '<div class="hint">左邊有 <span class="new"></span> 的筆記都在這裡，依 Jev 建議的順序排。按一篇筆記的「請 AI 整理這篇」，AI 會寫成來源頁、更新相關的概念頁。</div>' +
+    (q.ranking ? '<div class="hint"><span class="spin"></span> Jev 正在替新筆記排順序…</div>' : "") +
+    (q.pdfs && q.pdfs.waiting ? '<div class="hint">' + (q.pdfs.converting ? '<span class="spin"></span> 正在把 ' + q.pdfs.waiting + " 個 PDF 轉成筆記…"
+      : !q.pdfs.uv ? "有 " + q.pdfs.waiting + " 個 PDF 還沒轉成筆記：轉檔要用 uv，請先安裝（docs.astral.sh/uv），再重新打開 Lumen。"
+      : "有 " + q.pdfs.waiting + " 個 PDF 等著轉成筆記。") + "</div>" : "") +
+    (q.pdfs && q.pdfs.failed.length ? '<div class="hint">轉不出文字的 PDF（可能是掃描檔或加密）：' + q.pdfs.failed.map(f => esc(baseName(f))).join("、") + "</div>" : "");
+  if (q.ranking || (q.pdfs && q.pdfs.converting)) setTimeout(() => { if (S.sideTab === "raw" && S.rawMode === "todo") { queueData = null; renderTree(); } }, 8000);
   let last = null;
   for (const u of units.filter(u => !filter || u.unit.toLowerCase().includes(filter))) {
-    if (u.decision !== last) { html += '<div class="group">' + esc(u.decision === "unranked" ? "還沒排順序（下次 triage 會排）" : QUEUE_LABEL[u.decision] || u.decision) + "</div>"; last = u.decision; }
+    if (u.decision !== last) { html += '<div class="group">' + esc(u.decision === "unranked" ? (q.ranking ? "還沒排順序（Jev 排序中）" : S.tree.jev ? "還沒排順序" : "還沒排順序（連接 Jev 後會自動排）") : QUEUE_LABEL[u.decision] || u.decision) + "</div>"; last = u.decision; }
     const name = notesRel(u.unit).replace(/\.md$/, "");
     const pr = u.priority != null ? "P" + u.priority : "";
-    if (/\.md$/.test(u.unit)) { html += rowFile(u.unit, name, '<span class="count">' + pr + "</span>", u.decision === "unranked" ? "" : ""); continue; }
+    if (/\.md$/.test(u.unit)) { html += rowFile(u.unit, name, '<span class="count">' + (u.parts ? "已整理 " + u.parts[0] + "/" + u.parts[1] + (pr ? " · " : "") : "") + pr + "</span>", u.decision === "unranked" ? "" : ""); continue; }
     const open = S.queueOpen.has(u.unit);
     html += '<div class="folder"><div class="row" data-queue-folder="' + esc(u.unit) + '"><span class="caret">' + (open ? "▾" : "▸") + '</span><span class="name">' + esc(name) +
       '</span><span class="count">' + u.files + " 篇" + (pr ? " · " + pr : "") + "</span></div>";
@@ -342,7 +355,7 @@ async function moveFile(path, dir) {
   if (dirOf(path) === dir) return;
   const f = S.tree.raw.find(x => x.path === path);
   if (f && f.done && !(await dialog("搬移已整理的筆記？", "<p>「" + esc(baseName(path)) + "」已經整理成知識庫的來源頁，來源頁用路徑記住它（<code>source_path</code>）。</p><p>搬到「" + esc(dir) +
-    "」之後，這篇會暫時顯示成待整理，直到 agent 更新來源頁。連到它的 <code>[[連結]]</code> 用檔名，不受影響。</p>", "搬移"))) return;
+    "」之後，這篇會暫時顯示成待整理，等 AI 下次整理時更新來源頁。連到它的 <code>[[連結]]</code> 用檔名，不受影響。</p>", "搬移"))) return;
   try {
     const r = await api("/api/move", { path, dir });
     for (const t of S.tabs) if (t.path === path) { t.path = r.path; }
@@ -692,8 +705,8 @@ function renderFile(v, t) {
     const made = info && info.note;
     body = '<div class="to-note">' + (made
       ? '<div><strong>已經轉成筆記</strong>：<a class="wl" data-path="' + esc(made) + '">' + esc(baseName(made)) + "</a></div>" +
-        '<div class="muted">網頁的文字已經在那篇筆記裡，可以搜尋、找連結、交給 agent 整理。這裡的預覽是原始網頁的樣子。</div>'
-      : '<div class="to-note-row"><div><strong>這裡只是預覽</strong>：網頁還只是一個附件，裡面的文字不會被搜尋、不會找連結，agent 也不會整理它。</div>' +
+        '<div class="muted">網頁的文字已經在那篇筆記裡，可以搜尋、找連結、交給 AI 整理。這裡的預覽是原始網頁的樣子。</div>'
+      : '<div class="to-note-row"><div><strong>這裡只是預覽</strong>：網頁還只是一個附件，裡面的文字不會被搜尋、不會找連結，AI 也不會整理它。</div>' +
         (S.tree.read_only ? "" : '<button data-act="html2note" class="primary">轉成筆記</button>') + "</div>" +
         '<div class="muted">轉成筆記：把網頁的正文（去掉選單、側欄、廣告和程式）存成一篇筆記，格式跟 Web Clipper 剪下來的一樣，並連回這個原檔。原檔留在附件裡。</div>') +
       '</div><iframe class="file-frame" sandbox src="' + u + '"></iframe><div class="note-line">預覽在隔離的框裡，網頁的程式不會執行，碰不到你的筆記。</div>';
@@ -923,7 +936,7 @@ async function renderFilePanel(t) {
 function renderComparePanel(t) {
   const s = t.s;
   $("#panel").innerHTML = "<h3>正在比較</h3>" + suggestionCard(s).replace('<button data-compare="' + esc(s.key) + '">並排比較</button>', "") +
-    '<div class="note-line">看完兩邊：如果真的衝突，告訴 agent 在 <a data-path="' + esc(s.topic.path) + '">' + esc(s.topic.title) +
+    '<div class="note-line">看完兩邊：如果真的衝突，請 AI 在 <a data-path="' + esc(s.topic.path) + '">' + esc(s.topic.title) +
     "</a> 加一個矛盾或「不同看法」段落；如果只是談不同面向，按「看過，沒問題」，它就不會再出現。</div>";
 }
 
@@ -931,9 +944,9 @@ function renderPanel(p) {
   const el = $("#panel"), isRaw = mine(p.path);
   let html = '<h3>建議 <span class="n">' + (p.suggestions.length || "") + "</span></h3>";
   html += p.suggestions.length ? p.suggestions.map(suggestionCard).join("") : '<div class="note-line">沒有需要你看的事。</div>';
-  if (p.unsure) html += '<div class="note-line">另有 ' + p.unsure + " 對 Jev 不確定的說法差異沒列出：大約六成不是真矛盾，要 agent 讀過才會變成建議。</div>";
-  if (p.stale) html += '<div class="note-line">' + p.stale + " 對的判斷做完之後，相關頁面又改過，判斷可能過時，先不列。下次 lint 會重判。</div>";
-  if (p.suggestions.length || p.unsure) html += '<div class="note-line">這些判斷是 lint 時存下來的，Jev 關掉也看得到。</div>';
+  if (p.unsure) html += '<div class="note-line">另有 ' + p.unsure + " 對 Jev 不確定的說法差異沒列出：大約六成不是真矛盾，要等 AI 檢查知識庫時讀過，才會變成建議。</div>";
+  if (p.stale) html += '<div class="note-line">' + p.stale + " 對的判斷做完之後，相關頁面又改過，判斷可能過時，先不列。下次檢查知識庫時會重新判斷。</div>";
+  if (p.suggestions.length || p.unsure) html += '<div class="note-line">這些判斷是檢查知識庫時存下來的，Jev 關掉也看得到。</div>';
   if (p.recorded && p.recorded.length) html += "<h3>這頁記下的爭議</h3>" + p.recorded.map(recordedCard).join("");
 
   if (isRaw) {
@@ -943,7 +956,7 @@ function renderPanel(p) {
         p.organized.pages.slice(0, 30).map(c => '<a data-path="' + esc(c.path) + '">' + esc(c.title) + "</a>").join("") + "</div>";
     } else if (!p.private) {
       html += '<h3>還沒整理</h3><div class="note-line">' + (p.triage ? "Jev 的判斷：" + esc(QUEUE_LABEL[p.triage.decision] || p.triage.decision) + "（優先度 " + esc(p.triage.priority) + "）。" : "還沒排進佇列。") +
-        "</div>" + (S.tree.read_only ? "" : '<div class="ai-acts"><button data-ingest-note="' + esc(p.path) + '">✦ 請 AI 整理這篇</button></div>');
+        "</div>" + (S.tree.read_only ? "" : '<div class="ai-acts"><button data-ingest-note="' + esc(p.path) + '">' + ingestLabel(p.path) + "</button></div>");
     }
   }
 
@@ -957,7 +970,7 @@ function renderPanel(p) {
     if (p.private) html += '<div class="banner">日記不送 Jev，只用名稱比對。</div>';
     else if (S.checking.has(p.path)) html += '<div class="banner ok"><span class="spin"></span> Jev 正在判斷每個名稱是不是真的指那一頁…</div>';
     else if (!p.checked && unlinked.length) html += jevUsable() ? '<div class="note-line">目前只是名稱比對。<a id="check-now">用 Jev 判斷</a>（送出名稱前後的片段）' +
-      (p.stale_check ? "：筆記改過，之前的判斷已過期。" : "") + "</div>" : '<div class="note-line">只用名稱比對' + (S.tree.jev ? "（Jev 已關閉）" : "（沒有 Jev key）") + "：同名的不同東西也會列進來。</div>";
+      (p.stale_check ? "：筆記改過，之前的判斷已過期。" : "") + "</div>" : '<div class="note-line">只用名稱比對' + (S.tree.jev ? "（Jev 已關閉）" : "（沒有 Jev 金鑰）") + "：同名的不同東西也會列進來。</div>";
   }
   if (!unlinked.length) html += '<div class="note-line">沒找到提到卻沒連的頁面。</div>';
   else if (isRaw && p.checked) {
@@ -1152,7 +1165,7 @@ async function ask(q) {
 
 function renderJevState() {
   const el = $("#jev-state");
-  if (!S.tree.jev) { el.className = "jev-state off"; el.textContent = "沒有 Jev key：只用名稱比對和關鍵字搜尋"; return; }
+  if (!S.tree.jev) { el.className = "jev-state off"; el.textContent = "沒有 Jev 金鑰：只用名稱比對和關鍵字搜尋"; return; }
   el.className = "jev-state " + (S.jevOn ? "on" : "off");
   el.innerHTML = '<button id="jev-toggle" title="關掉後：搜尋改用關鍵字，筆記不送 Jev 判斷">Jev：' + (S.jevOn ? "開" : "關") + "</button>" +
     (S.tree.read_only ? ' <span class="chip">唯讀</span>' : "");
@@ -1341,7 +1354,7 @@ async function renameJob(path, name) {
     const newName = isNote ? baseName(r.path) : r.path.split("/").pop();
     let msg = "改名為「" + newName + "」";
     if (r.relinked.length) msg += "，更新了 " + r.relinked.length + " 篇筆記裡的連結";
-    if (r.warnings.includes("processed")) msg += "。這篇已整理過，知識庫的來源頁要等 agent 更新路徑";
+    if (r.warnings.includes("processed")) msg += "。這篇已整理過，知識庫的來源頁要等 AI 下次整理時更新路徑";
     toast(msg + "。", { label: "復原", fn: () => renameFile(r.path, oldName) });
   } catch (e) { toast("沒改成：" + e.message); renderView(); }
 }
@@ -1385,7 +1398,7 @@ async function showHistory(path) {
   try { r = await api("/api/history?path=" + encodeURIComponent(path)); } catch (e) { toast(e.message); return; }
   const name = baseName(path);
   if (!r.versions.length) {
-    await dialog("「" + name + "」的版本", "<p>還沒有較早的版本。從現在起，每次儲存改動前，app 會先留下前一版（連續寫作時每 10 分鐘最多留一版，每篇最多 100 版），存在筆記庫的隱藏資料夾 <code>.notesapp/history/</code>。</p>", "好");
+    await dialog("「" + name + "」的版本", "<p>還沒有較早的版本。從現在起，每次儲存改動前，Lumen 會先留下前一版（連續寫作時每 10 分鐘最多留一版，每篇最多 100 版），存在筆記庫的隱藏資料夾 <code>.lumen/history/</code>。</p>", "好");
     return;
   }
   let cur = "";
@@ -1435,8 +1448,8 @@ let startState = null;
 async function showStart(mode) {
   const el = $("#start");
   if (mode === "nokey") {
-    el.innerHTML = '<div class="start-card"><h1>筆記</h1><p>這個頁面要從 app 的<strong>啟動連結</strong>打開。</p>' +
-      '<p class="muted">啟動 app 時，終端機會印出一個帶存取碼的網址（<code>http://127.0.0.1:…/?k=…</code>）。用那個網址打開一次，這個瀏覽器之後就記得了。存取碼讓別的網站沒辦法透過瀏覽器讀你的筆記。</p></div>';
+    el.innerHTML = '<div class="start-card"><h1>Lumen</h1><p>這個頁面要從 Lumen 的<strong>啟動連結</strong>打開。</p>' +
+      '<p class="muted">啟動 Lumen 時，終端機會印出一個帶存取碼的網址（<code>http://127.0.0.1:…/?k=…</code>）。用那個網址打開一次，這個瀏覽器之後就記得了。存取碼讓別的網站沒辦法透過瀏覽器讀你的筆記。</p></div>';
     el.hidden = false; return;
   }
   let v;
@@ -1454,7 +1467,7 @@ function renderStart() {
     (x.path === v.current ? '<span class="chip">正在用</span>' : "") + (x.protected ? '<span class="chip warn">受保護・唯讀</span>' : "") + (x.exists ? "" : '<span class="chip warn">找不到資料夾</span>') +
     '<button class="ghost" data-forget="' + esc(x.path) + '" title="從清單拿掉（資料夾本身不動）">×</button></div>').join("");
   el.innerHTML = '<div class="start-card">' + (v.current ? '<button class="start-close" data-s="close" title="回到筆記">×</button>' : "") +
-    "<h1>" + (v.current ? "切換筆記庫" : "歡迎") + "</h1>" +
+    "<h1>" + (v.current ? "切換筆記庫" : "歡迎使用 Lumen") + "</h1>" +
     '<p class="muted">筆記庫就是一個資料夾。任何放 Markdown 筆記的資料夾都可以，包括 Obsidian 的 vault。你的筆記不會被 AI 改動；AI 整理出來的頁面放在資料夾裡的 <code>wiki/</code>。</p>' +
     (rows ? '<div class="group">最近用過</div><div class="vault-list">' + rows + "</div>" : "") +
     '<div class="start-acts"><button data-s="create" class="' + (mode === "create" ? "primary" : "") + '">＋ 建立新的筆記庫</button><button data-s="open" class="' + (mode === "open" ? "primary" : "") + '">打開一個資料夾…</button></div>' +
@@ -1475,7 +1488,7 @@ async function browse(path) {
       : b.root ? '<span class="muted small">選一個放筆記的資料夾（不能是整個家目錄）</span>'
         : '<button class="primary" data-s="do-open">打開「' + esc(b.name) + "」</button>") + "</div></div>" +
     '<p class="muted small">' + (create ? "會建立一個新資料夾，裡面有 <code>journal/</code>（日記）、<code>assets/</code>（附件）、<code>wiki/</code>（AI 的頁面）和 Obsidian 的設定，用 Obsidian 也能打開。"
-      : "打開既有的資料夾不會改動裡面的檔案。有 <code>raw/</code> 資料夾的話，筆記就是 <code>raw/</code>；沒有的話，除了 <code>wiki/</code> 以外都算你的筆記。") + "</p>";
+      : "打開既有的資料夾不會改動裡面的檔案。除了 AI 用的 <code>wiki/</code>，資料夾裡的 Markdown 都算你的筆記。") + "</p>";
   if (create) $("#new-vault-name").focus();
 }
 
@@ -1552,8 +1565,8 @@ async function loadGptModels() {
 }
 const AI_EFFORTS = [["auto", "思考：自動"], ["low", "思考：少"], ["medium", "思考：一般"], ["high", "思考：仔細"]];
 const EFFORT_NAME = { low: "想得少", medium: "一般", high: "想得仔細" };
-function pref(k) { try { return localStorage.getItem("notesapp." + k) || "auto"; } catch (e) { return "auto"; } }
-function setPref(k, v) { try { localStorage.setItem("notesapp." + k, v); } catch (e) {} }
+function pref(k) { try { return localStorage.getItem("lumen." + k) || localStorage.getItem("notesapp." + k) || "auto"; } catch (e) { return "auto"; } }
+function setPref(k, v) { try { localStorage.setItem("lumen." + k, v); } catch (e) {} }
 const aiModel = () => pref("aiModel"), aiEffort = () => pref("aiEffort");
 S.rtab = "note";
 
@@ -1704,7 +1717,7 @@ function agentHtml(t) {
   if (t.status === "stopped") h += '<div class="ai-meta">已停止。' + ((t.changes || []).length ? "" : "") + "</div>";
   if (t.status === "cancelled") h += '<div class="ai-meta">沒有執行。</div>';
   if (["planning", "acting"].includes(t.status)) h += '<div class="ai-acts"><button data-ag-stop="' + esc(t.id) + '">停止</button></div>';
-  if (t.cost && !["planning", "acting", "starting"].includes(t.status)) h += '<div class="ai-meta">約 $' + t.cost.toFixed(2) + "（以 API 價格換算，用的是你的 Claude 額度）" + (t.seconds ? " · " + Math.round(t.seconds) + " 秒" : "") + "</div>";
+  if (t.cost && !["planning", "acting", "starting"].includes(t.status)) h += '<div class="ai-meta">約 $' + t.cost.toFixed(2) + "（以 API 價格換算；實際用的是你的訂閱額度）" + (t.seconds ? " · " + Math.round(t.seconds) + " 秒" : "") + "</div>";
   return h + "</div></div>";
 }
 
@@ -1747,8 +1760,8 @@ function renderAI() {
   if (!AI.turns.length) {
     const ctx = aiContext();
     const ex = (ctx && !ctx.private ? ["這篇的重點是什麼？", "這篇和我知識庫裡哪些概念有關？"] : []).concat(["我的筆記裡有哪些互相矛盾的說法？", "保險和信任有什麼關係？"]);
-    conv = '<div class="ai-intro"><h3>✦ 問 AI</h3><p>在上面的搜尋框打問題按 ⌘↵，或在下面直接問。app 先找出相關的頁，連同目前打開的筆記交給 Claude，回答裡的頁面都能點。</p>' +
-      '<p class="muted">Claude 只回答，不能開檔案、也不會改任何東西。日記永遠不送出。</p>' +
+    conv = '<div class="ai-intro"><h3>✦ 問 AI</h3><p>在上面的搜尋框打問題按 ⌘↵，或在下面直接問。Lumen 先找出相關的頁，連同目前打開的筆記交給 AI，回答裡的頁面都能點。</p>' +
+      '<p class="muted">AI 只回答，不能開檔案，也不會改任何東西。日記永遠不送出。</p>' +
       '<div class="ai-examples">' + ex.map(x => '<button data-example="' + esc(x) + '">' + esc(x) + "</button>").join("") + "</div></div>";
   }
   conv += AI.turns.map(turnHtml).join("");
@@ -1855,7 +1868,7 @@ async function refreshConnect() {
   const html = [claudeCard(st.claude), chatgptCard(st.chatgpt), jevCard(st.jev)];
   const body = $("#cn-body");
   if (!body.querySelector(".cn-slot")) {
-    body.innerHTML = '<p class="muted cn-lead">用你自己的訂閱或金鑰。app 不經手你的帳號密碼，用量算在你自己的方案裡。至少連接 Claude 或 ChatGPT 其中一個。</p>' +
+    body.innerHTML = '<p class="muted cn-lead">用你自己的訂閱或金鑰。Lumen 不經手你的帳號密碼，用量算在你自己的方案裡。Claude Code 和 ChatGPT 至少連一個。</p>' +
       '<div class="cn-slot"></div><div class="cn-slot"></div><div class="cn-slot"></div>';
   }
   // only the cards that changed are redrawn: a poll while Claude installs never swallows a click elsewhere
@@ -1878,10 +1891,10 @@ async function refreshConnect() {
 }
 
 // Every card follows one rule: 未連接 → 「連接」; 連接中… → 「取消」; 已連接 → 「中斷連接」 (and 「管理用量」 where the
-// service has a usage page). Each card: what it is for, what is in use now, the buttons, one line on what the app keeps.
+// service has a usage page). Each card: what it is for, what is in use now, the buttons, one line on what Lumen keeps.
 const CN_STATE = { off: "未連接", wait: "連接中…", on: "已連接" };
 function card(name, st, o) {
-  return '<section class="cn-card"><div class="cn-row"><h3>' + name + '</h3><span class="cn-state ' + st + '">' + CN_STATE[st] + "</span></div>" +
+  return '<section class="cn-card"><div class="cn-row"><h3>' + name + (o.sub ? '<span class="cn-sub">' + o.sub + "</span>" : "") + '</h3><span class="cn-state ' + st + '">' + CN_STATE[st] + "</span></div>" +
     "<p>" + o.purpose + "</p>" + (o.detail ? '<div class="cn-detail">' + o.detail + "</div>" : "") +
     '<div class="cn-acts">' + o.acts + "</div>" + (o.err ? '<p class="cn-err">' + o.err + "</p>" : "") +
     (o.note ? '<p class="muted small">' + o.note + "</p>" : "") + "</section>";
@@ -1893,29 +1906,29 @@ function claudeCard(c) {
   const job = c.job || {};
   const installing = job.kind === "install" && job.status === "running";
   const waiting = job.kind === "login" && job.status === "waiting" && !c.logged_in;
-  const o = { purpose: "用你的 Claude 訂閱（Pro、Max）回答問題、整理知識庫。" };
+  const o = { sub: "Claude 訂閱（Pro、Max）登入", purpose: "用你的 Claude 訂閱回答問題、整理知識庫。" };
   let st;
   if (c.connected) {
     st = "on";
     const plan = c.subscription ? "Claude " + (c.plan ? cap(c.plan) + " " : "") + "訂閱" : "Claude API 金鑰（按用量計費）";
     o.detail = "目前使用：你的 " + esc(plan) + "。" + (c.subscription ? "" : '<span class="cn-err">這不是訂閱登入，用量會按 API 計費。</span>');
     o.acts = cnBtn("claude-disconnect", "中斷連接") + cnLink("https://claude.ai/settings/usage", "管理用量");
-    o.note = "中斷連接只是 app 不再使用 Claude，你的 Claude Code 登入不受影響。";
+    o.note = "中斷連接只是 Lumen 不再使用 Claude Code，你在 Claude Code 的登入不受影響。";
   } else if (installing || waiting) {
     st = "wait";
     o.detail = installing ? installProgress(c.install || {})
       : job.terminal ? "已經打開終端機，照視窗裡的說明在瀏覽器登入，完成後這裡會自動變成已連接。"
       : "瀏覽器會出現 Claude 的登入頁，登入並按「Authorize」，這裡會自動變成已連接。";
     o.acts = cnBtn("claude-cancel", "取消") + (waiting && !job.terminal ? cnBtn("claude-terminal", "瀏覽器沒出現？改用終端機登入") : "");
-    o.note = "登入完全在 Anthropic 的網頁完成，app 不經手你的帳號密碼。";
+    o.note = "登入完全在 Anthropic 的網頁完成，Lumen 不經手你的帳號密碼。";
   } else {
     st = "off";
-    o.acts = cnBtn("claude-connect", "連接 Claude", true);
+    o.acts = cnBtn("claude-connect", "連接 Claude Code", true);
     o.note = c.logged_in ? "你已經登入 Claude Code，按一下就會用它。"
-      : (c.installed ? "" : "會先用 Anthropic 官方安裝程式裝好 Claude Code（不用管理員密碼），") + "接著在瀏覽器登入。app 不經手你的帳號密碼。";
+      : (c.installed ? "" : "會先用 Anthropic 官方安裝程式裝好 Claude Code（不用管理員密碼），") + "接著在瀏覽器登入。Lumen 不經手你的帳號密碼。";
   }
   if (job.status === "error" && job.error) o.err = esc(job.error) + (job.tail ? '<br><span class="small">' + esc(job.tail.slice(-200)) + "</span>" : "");
-  return card("Claude", st, o);
+  return card("Claude Code", st, o);
 }
 
 // The official installer's progress: getting ready → downloading (bar, MB, time left) → installing → sign-in.
@@ -1936,19 +1949,19 @@ function installProgress(p) {
 }
 
 function chatgptCard(g) {
-  const o = { purpose: "用你的 ChatGPT 付費方案（Go、Plus、Pro）回答問題。免費版 OpenAI 不開放給其他 app。" };
+  const o = { purpose: "用你的 ChatGPT 付費方案（Go、Plus、Pro）回答問題、整理知識庫。OpenAI 不開放免費版給其他 app 使用。" };
   let st;
   if (g.connected) {
     st = "on";
     o.detail = "目前使用：<b>Using ChatGPT plan</b>" + (g.email ? '<span class="muted">（' + esc(g.email) + "）</span>" : "") + "。" +
-      (g.plan_use ? "" : '<span class="cn-err">你沒有同意讓 app 使用方案額度，請中斷後重新連接。</span>');
+      (g.plan_use ? "" : '<span class="cn-err">你沒有同意讓 Lumen 使用方案額度，請中斷後重新連接。</span>');
     o.acts = cnBtn("gpt-signout", "中斷連接") + cnLink("https://chatgpt.com/settings/usage", "Manage usage");
-    o.note = "中斷連接會撤銷並刪除這個 app 的 ChatGPT 登入。";
+    o.note = "中斷連接會撤銷並刪除 Lumen 的 ChatGPT 登入。";
   } else if (CN.waitGpt) {
     st = "wait";
     o.detail = "等你在瀏覽器同意…如果 OpenAI 的頁面說「無法取得必要權限」，表示這個帳號的方案不能用在其他 app。";
     o.acts = cnBtn("gpt-cancel", "取消");
-    o.note = "登入完全在 OpenAI 的網頁完成，app 不經手你的帳號密碼。";
+    o.note = "登入完全在 OpenAI 的網頁完成，Lumen 不經手你的帳號密碼。";
   } else {
     st = "off";
     o.acts = '<button class="primary cn-gpt" data-cn="gpt-start">Continue with ChatGPT</button>';
@@ -1958,14 +1971,14 @@ function chatgptCard(g) {
 }
 
 function jevCard(j) {
-  const o = { purpose: "幫 app 找相關的頁、判斷問題難度、檢查整理結果。可以不連，app 會改用關鍵字搜尋。" };
+  const o = { purpose: "幫 Lumen 找相關的頁、判斷問題難度、挑出筆記的重點段落、檢查整理結果。可以不連，搜尋會改用關鍵字。" };
   let st;
   if (j.connected) {
     st = "on";
-    const where = { app: "存在這個 app", env: "環境變數 TYPESAFE_API_KEY", shared: "~/.config/typesafe" }[j.source];
+    const where = { app: "存在 Lumen", env: "環境變數 TYPESAFE_API_KEY", shared: "~/.config/typesafe" }[j.source];
     o.detail = "目前使用：你的 TypeSafe 金鑰（" + where + "）。";
     o.acts = cnBtn("jev-remove", "中斷連接");
-    o.note = j.source === "app" ? "中斷連接會刪掉 app 存的金鑰。" : "中斷連接只是 app 不再使用 Jev，你的金鑰檔案不受影響。";
+    o.note = j.source === "app" ? "中斷連接會刪掉 Lumen 存的金鑰。" : "中斷連接只是 Lumen 不再使用 Jev，你的金鑰檔案不受影響。";
   } else if (CN.jevEditing) {
     st = "off";                                    // nothing is running yet: it waits for the key
     o.detail = '<input id="cn-jev-key" type="password" autocomplete="off" placeholder="貼上 TypeSafe API 金鑰">';
@@ -1983,7 +1996,7 @@ function jevCard(j) {
 async function gptWelcome() {
   await api("/api/connect/chatgpt/welcomed", {}).catch(() => {});
   dialog("You're using your ChatGPT plan", "<p>Eligible usage in this app uses your ChatGPT plan. Manage usage in your ChatGPT settings.</p>" +
-    '<p class="muted">之後在 app 裡用 ChatGPT 回答，用量算在你的 ChatGPT 方案。可以在 <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener">ChatGPT 設定 → Usage</a> 查看。</p>', "Got it");
+    '<p class="muted">之後在 Lumen 裡用 ChatGPT 回答，用量算在你的 ChatGPT 方案。可以在 <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener">ChatGPT 設定 → Usage</a> 查看。</p>', "Got it");
 }
 
 async function connectClick(e) {
@@ -1996,10 +2009,10 @@ async function connectClick(e) {
   if (what === "claude-connect") await run("/api/connect/claude/connect");
   else if (what === "claude-terminal") await run("/api/connect/claude/terminal");
   else if (what === "claude-cancel") await run("/api/connect/claude/cancel");
-  else if (what === "claude-disconnect") { if (await sure("Claude", "app 不再使用 Claude；你的 Claude Code 登入不受影響。")) await run("/api/connect/claude/disconnect"); }
+  else if (what === "claude-disconnect") { if (await sure("Claude", "Lumen 不再使用 Claude Code；你在 Claude Code 的登入不受影響。")) await run("/api/connect/claude/disconnect"); }
   else if (what === "gpt-start") { if (await run("/api/connect/chatgpt/start")) CN.waitGpt = true; }
   else if (what === "gpt-cancel") CN.waitGpt = false;
-  else if (what === "gpt-signout") { if (await sure("ChatGPT", "app 會撤銷並刪除這台電腦上的 ChatGPT 登入。")) await run("/api/connect/chatgpt/signout"); }
+  else if (what === "gpt-signout") { if (await sure("ChatGPT", "Lumen 會撤銷並刪除這台電腦上的 ChatGPT 登入。")) await run("/api/connect/chatgpt/signout"); }
   else if (what === "jev-connect") { const r = await run("/api/connect/jev/connect"); CN.jevMsg = ""; if (r && r.need_key) CN.jevEditing = true; else await refreshTree(); }
   else if (what === "jev-cancel") { CN.jevEditing = false; CN.jevMsg = ""; }
   else if (what === "jev-save") {
@@ -2010,7 +2023,7 @@ async function connectClick(e) {
   }
   else if (what === "jev-remove") {
     const own = ((await api("/api/connect/status").catch(() => ({}))).jev || {}).source === "app";
-    if (await sure("Jev", own ? "app 會刪掉它存的金鑰。" : "app 不再使用 Jev；你的金鑰檔案不受影響。")) { await run("/api/connect/jev/remove"); await refreshTree(); }
+    if (await sure("Jev", own ? "Lumen 會刪掉它存的金鑰。" : "Lumen 不再使用 Jev；你的金鑰檔案不受影響。")) { await run("/api/connect/jev/remove"); await refreshTree(); }
     CN.jevMsg = "";
   }
   refreshConnect();
