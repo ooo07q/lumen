@@ -583,13 +583,35 @@ def has_jev():
     return bool(os.environ.get("TYPESAFE_API_KEY") or os.path.exists(jev.KEY_FILE))
 
 
-# ------------------------------------------------------------------ the wiki's language (per vault)
-# Default "auto": the language the wiki already uses; in an empty wiki, the one most notes are in. When the notes
-# are mixed (no language in 80% of them), the first AI task asks the user. The user can change it any time.
-# Detection runs here, on this Mac; nothing is sent anywhere.
+# ------------------------------------------------------------------ the wiki's language (per vault, automatic)
+# No setting and no question: the language the wiki's pages already use; in an empty wiki, the language most of
+# the user's notes are in (any language). Detection runs here, on this Mac; nothing is sent anywhere.
 
-LANGS = {"en": "English", "zh-Hant": "Traditional Chinese (繁體中文)", "zh-Hans": "Simplified Chinese (简体中文)"}
-LANG_SHORT = {"en": "英文", "zh-Hant": "繁體中文", "zh-Hans": "簡體中文"}
+LANGS = {"en": "English", "zh-Hant": "Traditional Chinese (繁體中文)", "zh-Hans": "Simplified Chinese (简体中文)",
+         "ja": "Japanese (日本語)", "ko": "Korean (한국어)", "fr": "French (français)", "de": "German (Deutsch)",
+         "es": "Spanish (español)", "it": "Italian (italiano)", "pt": "Portuguese (português)",
+         "nl": "Dutch (Nederlands)", "vi": "Vietnamese (Tiếng Việt)", "ru": "Russian (русский)",
+         "uk": "Ukrainian (українська)", "el": "Greek (Ελληνικά)", "ar": "Arabic (العربية)", "he": "Hebrew (עברית)",
+         "hi": "Hindi (हिन्दी)", "th": "Thai (ไทย)"}
+LANG_ZH = {"en": "英文", "zh-Hant": "繁體中文", "zh-Hans": "簡體中文", "ja": "日文", "ko": "韓文", "fr": "法文",
+           "de": "德文", "es": "西班牙文", "it": "義大利文", "pt": "葡萄牙文", "nl": "荷蘭文", "vi": "越南文",
+           "ru": "俄文", "uk": "烏克蘭文", "el": "希臘文", "ar": "阿拉伯文", "he": "希伯來文", "hi": "印地文",
+           "th": "泰文"}
+# Latin-script languages told apart by their commonest short words
+STOP = {
+    "en": "the and of to is in that it for was with as on are this be by not or have from",
+    "fr": "le la les et des est une dans que pour qui pas sur du au avec ce sont par",
+    "de": "der die das und ist nicht mit den ein eine zu auf sich dem auch von wird sind",
+    "es": "el la los las y que de en es por con una para del se no lo como más",
+    "it": "il la di che e è per un una non sono con del della gli le si come anche",
+    "pt": "o a os as e que de do da em um uma para com não é se por mais como",
+    "nl": "de het een en van is dat niet met op te zijn voor er die ook aan bij",
+    "vi": "và của là có không những được trong cho các một người này với đã",
+}
+STOP = {k: set(v.split()) for k, v in STOP.items()}
+SCRIPTS = [("ja", r"[\u3040-\u30ff]"), ("ko", r"[\uac00-\ud7af]"), ("el", r"[\u0370-\u03ff]"),
+           ("ar", r"[\u0600-\u06ff]"), ("he", r"[\u0590-\u05ff]"), ("hi", r"[\u0900-\u097f]"),
+           ("th", r"[\u0e00-\u0e7f]"), ("cyr", r"[\u0400-\u04ff]")]
 _ZH_SETS = []
 
 
@@ -604,19 +626,29 @@ def zh_sets():
 
 
 def text_lang(text):
-    """'en', 'zh-Hant', 'zh-Hans' or None (too little text)."""
+    """The main language of a text as a code from LANGS, or None (too little text)."""
     text = re.sub(r"^---\n.*?\n---\n", "", text, flags=re.S)
-    text = re.sub(r"```.*?```|https?://\S+|!\[\[[^\]]*\]\]|\[\[[^\]]*\]\]|<[^>]+>", " ", text, flags=re.S)
-    han = re.findall(r"[一-鿿]", text)
-    words = len(re.findall(r"[A-Za-z]{2,}", text))
-    if len(han) + words < 30:
+    text = re.sub(r"```.*?```|https?://\S+|!?\[\[[^\]]*\]\]|<[^>]+>", " ", text, flags=re.S)
+    han = re.findall(r"[\u4e00-\u9fff]", text)
+    counts = {code: len(re.findall(rx, text)) for code, rx in SCRIPTS}
+    latin = re.findall(r"[^\W\d_]{2,}", re.sub(r"[^\x00-\u024f\u1e00-\u1eff]", " ", text).lower())
+    # a CJK or other non-Latin character carries about a word's meaning
+    units = {"han": len(han), "latin": len(latin), **counts}
+    if sum(units.values()) < 30:
         return None
-    if len(han) < words:            # a Chinese character carries about a word's meaning
-        return "en"
-    trad, simp = zh_sets()
-    t = sum(c in trad for c in han)
-    s = sum(c in simp for c in han)
-    return "zh-Hans" if s > t else "zh-Hant"
+    top = max(units, key=units.get)
+    if top == "han":
+        if counts["ja"] > len(han) * 0.1:                        # kana among the kanji: Japanese
+            return "ja"
+        trad, simp = zh_sets()
+        return "zh-Hans" if sum(c in simp for c in han) > sum(c in trad for c in han) else "zh-Hant"
+    if top == "cyr":
+        return "uk" if re.search(r"[іїєґІЇЄҐ]", text) else "ru"
+    if top != "latin":
+        return top
+    hits = {k: sum(w in sw for w in latin) for k, sw in STOP.items()}
+    best = max(hits, key=hits.get)
+    return best if hits[best] else "en"
 
 
 def detect_lang():
@@ -641,42 +673,18 @@ def detect_lang():
     return {"wiki": shares(wiki_texts), "notes": shares(note_texts)}
 
 
-def lang_setting():
-    return load_settings().get("vault_lang", {}).get(VAULT or "", {})
-
-
 def wiki_lang():
-    """(code or None, how, detection). how: user | wiki | notes | mixed (ask the user) | empty."""
-    s = lang_setting()
-    if s.get("wiki") in LANGS:
-        return s["wiki"], "user", None
+    """(code or None, how, detection). how: wiki (the pages' language) | notes (most notes') | empty."""
     d = detect_lang()
-    if d["wiki"]:
-        return next(iter(d["wiki"])), "wiki", d
-    if d["notes"]:
-        top, share = next(iter(d["notes"].items()))
-        return (top, "notes", d) if share >= 0.8 else (None, "mixed", d)
+    for src in ("wiki", "notes"):
+        if d[src]:
+            return next(iter(d[src])), src, d
     return None, "empty", d
 
 
 def api_lang(q):
     code, how, d = wiki_lang()
-    return 200, {"wiki": lang_setting().get("wiki", "auto"), "resolved": code, "how": how, "detected": d,
-                 "choices": LANG_SHORT}
-
-
-def api_lang_set(body):
-    code = body.get("wiki")
-    if code not in list(LANGS) + ["auto"]:
-        return 400, {"error": "不認得的語言"}
-    s = load_settings()
-    vl = s.setdefault("vault_lang", {})
-    if code == "auto":
-        vl.pop(VAULT, None)
-    else:
-        vl[VAULT] = {"wiki": code}
-    save_settings(s)
-    return api_lang({})
+    return 200, {"resolved": code, "how": how, "detected": d, "names": LANG_ZH}
 
 
 def api_tree(q):
@@ -1856,29 +1864,32 @@ def agent_rules():
     return allow, write, deny
 
 
-UI_LANGS = {"zh-Hant": "Traditional Chinese (繁體中文)", "zh-Hans": "Simplified Chinese (简体中文)", "en": "English"}
-
-
 def ui_lang(tag):
-    """The app's interface language from the browser's (the system's): 'zh-TW' -> zh-Hant, 'zh-CN' -> zh-Hans."""
-    t = str(tag or "").lower()
-    if t.startswith("zh"):
-        return "zh-Hans" if any(x in t for x in ("hans", "-cn", "-sg", "-my")) else "zh-Hant"
-    return "en"
+    """The interface (system) language as a LANGS code, or the raw tag for a language not in LANGS."""
+    t = str(tag or "en").strip()
+    low = t.lower()
+    if low.startswith("zh"):
+        return "zh-Hans" if any(x in low for x in ("hans", "-cn", "-sg", "-my")) else "zh-Hant"
+    base = low.split("-")[0]
+    return base if base in LANGS else (t[:20] if re.match(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$", t) else "en")
+
+
+def lang_name(code):
+    return LANGS.get(code) or "the language of the locale '%s'" % code
 
 
 def agent_facts(job):
     notes = wiki.RAW_REL + "/" if wiki.RAW_REL else "the whole vault except wiki/, tools/, templates/ and hidden folders"
     wl = job.get("wiki_lang")
-    how = {"user": "the user's setting", "wiki": "the language the wiki's pages already use",
+    how = {"wiki": "the language the wiki's pages already use",
            "notes": "the language most of the user's notes are in",
            "interface": "the app's interface language; there are no notes to go by yet"}.get(job.get("wiki_lang_how"), "")
-    lang = ("Wiki language: %s (%s). Write wiki pages in it.\n" % (LANGS[wl], how) if wl else
+    lang = ("Wiki language: %s (%s). Write wiki pages in it.\n" % (lang_name(wl), how) if wl else
             "Wiki language: not set; follow the Language rules in your instructions.\n")
     return ("Vault: %s\nThe user's notes: %s\nJournal (off limits): %s/\nToday: %s\nJev: %s\n%s"
-            "The user's language (the app's interface): %s; write your messages to the user (plan, report) in it.\n"
+            "The user's language (the system language): %s; write your messages to the user (plan, report) in it.\n"
             % (VAULT, notes, wiki.JOURNAL_REL, time.strftime("%Y-%m-%d"), "on" if job["jev"] else "off", lang,
-               UI_LANGS[job.get("ui_lang") or "en"]))
+               lang_name(job.get("ui_lang") or "en")))
 
 
 def agent_cmd(job, phase):
@@ -2061,11 +2072,7 @@ def api_agent_start(body):
         label = "檢查知識庫"
     else:
         return 400, {"error": "不認得的工作"}
-    if body.get("lang") in LANGS:                 # the user's answer to "which language?" below
-        api_lang_set({"wiki": body["lang"]})
     wl, how, det = wiki_lang()
-    if how == "mixed":                            # notes in several languages and no wiki yet: ask once
-        return 409, {"error": "need_lang", "need_lang": det["notes"], "choices": LANG_SHORT}
     if how == "empty":
         wl, how = ui_lang(body.get("ui_lang")), "interface"
     model = body.get("model") if body.get("model") in MODELS else "sonnet"
@@ -2298,7 +2305,7 @@ POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_s
         "/api/new": api_new, "/api/rename": api_rename, "/api/history/restore": api_history_restore,
         "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop,
         "/api/agent/start": api_agent_start, "/api/agent/approve": api_agent_approve, "/api/agent/stop": api_agent_stop,
-        "/api/agent/undo": api_agent_undo, "/api/lang/set": api_lang_set}
+        "/api/agent/undo": api_agent_undo}
 # these work with no vault open
 GET_APP = {"/api/vaults": api_vaults, "/api/browse": api_browse}
 POST_APP = {"/api/vault/open": api_vault_open, "/api/vault/create": api_vault_create, "/api/vault/forget": api_vault_forget}
@@ -2323,6 +2330,7 @@ def api_chatgpt_model(body):
 CONNECT_GET = {"/api/connect/status": api_connect_status, "/api/connect/chatgpt/models": lambda q: connect.gpt_models()}
 CONNECT_POST = {
     "/api/connect/claude/connect": lambda b: connect.claude_connect(),
+    "/api/connect/claude/terminal": lambda b: connect.claude_terminal(),
     "/api/connect/claude/cancel": lambda b: connect.claude_cancel(),
     "/api/connect/chatgpt/start": lambda b: connect.gpt_start(),
     "/api/connect/chatgpt/signout": lambda b: connect.gpt_signout(),

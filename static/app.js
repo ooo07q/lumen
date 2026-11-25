@@ -1515,7 +1515,7 @@ $("#brand").addEventListener("click", async e => {
   const r = $("#brand").getBoundingClientRect();
   const items = v.vaults.filter(x => x.exists).slice(0, 8).map(x => ({ label: (x.path === v.current ? "✓ " : "　 ") + x.name, fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
   items.push(null, { label: "打開其他資料夾…", fn: () => showStart("open") }, { label: "建立新的筆記庫…", fn: () => showStart("create") },
-    { label: "管理清單…", fn: () => showStart() }, null, { label: "✦ 連接 AI 與語言…", fn: () => showConnect() },
+    { label: "管理清單…", fn: () => showStart() }, null, { label: "✦ 連接 AI…", fn: () => showConnect() },
     { label: "✦ 請 AI 檢查知識庫…", fn: () => startAgent("lint", {}) },
     { label: "在 Finder 中顯示", fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) });
   showMenu(r.left, r.bottom + 4, items);
@@ -1609,18 +1609,11 @@ async function startAgent(task, extra) {
   AI.turns.push(turn); renderAI();
   const body = Object.assign({ task, model: m === "auto" ? null : m, effort: e === "auto" ? null : e, jev: !!jevUsable(),
     ui_lang: navigator.language }, extra);
-  for (;;) {
-    try { const r = await api("/api/agent/start", body); turn.id = r.id; break; }
-    catch (err) {
-      if (err.data && err.data.need_lang && !body.lang) {          // notes in several languages: ask once
-        const lang = await askWikiLang(err.data.need_lang, err.data.choices);
-        if (lang) { body.lang = lang; continue; }
-        AI.turns.splice(AI.turns.indexOf(turn), 1); renderAI(); return;
-      }
-      turn.status = "error"; turn.error = err.message; renderAI();
-      if (err.data && err.data.connect) showConnect();
-      return;
-    }
+  try { const r = await api("/api/agent/start", body); turn.id = r.id; }
+  catch (err) {
+    turn.status = "error"; turn.error = err.message; renderAI();
+    if (err.data && err.data.connect) showConnect();
+    return;
   }
   pollAgent(turn);
 }
@@ -1802,18 +1795,8 @@ $("#ai").addEventListener("keydown", e => {
 // Each person uses their own: their Claude subscription through Claude Code (Anthropic's own sign-in in the
 // browser; the app never sees it), their ChatGPT plan through OpenAI's "Sign in with ChatGPT", their own Jev key.
 
-const LANG_NAME = { en: "英文", "zh-Hant": "繁體中文", "zh-Hans": "簡體中文" };
+let LANG_NAME = {};
 const pct = sh => Object.entries(sh || {}).filter(([, v]) => v >= 0.01).map(([k, v]) => (LANG_NAME[k] || k) + " " + Math.round(v * 100) + "%").join("、");
-
-async function askWikiLang(shares, choices) {
-  const opts = Object.entries(choices).map(([k, l], i) => '<label class="cn-radio"><input type="radio" name="wl" value="' + k + '"' +
-    (i === 0 ? "" : "") + (k === Object.keys(shares)[0] ? " checked" : "") + "> " + esc(l) + "</label>").join("");
-  const ok = await dialog("知識庫要用哪種語言寫？", "<p>你的筆記混用了幾種語言（" + esc(pct(shares)) + "）。AI 整理出來的知識庫頁面要統一用一種語言寫，" +
-    "原文的關鍵詞和引文會保留在旁邊。之後可以在「連接 AI 與語言」裡改。</p>" + opts, "用這個語言");
-  if (!ok) return null;
-  const c = document.querySelector('input[name="wl"]:checked');
-  return c ? c.value : null;
-}
 
 const CN = { open: false, timer: null, models: null, jevMsg: "", codeMsg: "" };
 
@@ -1873,22 +1856,24 @@ function claudeCard(c) {
     const plan = c.subscription ? (c.plan ? cap(c.plan) + " 訂閱" : "訂閱") : c.method === "api_key" ? "API 金鑰（按用量計費）" : (c.method || "");
     state = "已連接"; cls = "on";
     body = "<p>使用你的 Claude " + esc(plan) + "。" + (c.expires ? '<span class="muted">登入到 ' + esc(String(c.expires).slice(0, 10)) + " 前有效。</span>" : "") + "</p>" +
-      (waiting || job.status === "done" ? '<p class="muted small">終端機視窗可以關掉了。</p>' : "") +
+      (job.terminal && (waiting || job.status === "done") ? '<p class="muted small">終端機視窗可以關掉了。</p>' : "") +
       (c.subscription ? "" : '<p class="muted small">這不是訂閱登入，用量會按 API 計費。</p>');
   } else if (installing) {
     state = "安裝中…"; cls = "wait";
     body = '<p>正在用 Anthropic 官方安裝程式安裝 Claude Code，大約一分鐘。裝好會直接帶你登入。</p>';
   } else if (waiting) {
     state = "等你登入…"; cls = "wait";
-    body = "<p>已經打開終端機，瀏覽器會出現 Claude 的登入頁。登入並按「Authorize」，這裡會自動變成已連接。</p>" +
-      '<p class="muted small">瀏覽器沒出現？看終端機視窗裡的說明。登入完全在 Anthropic 的流程裡完成，app 不會經手。</p>' +
-      '<div class="cn-acts"><button class="ghost" data-cn="claude-connect">再開一次</button></div>';
+    body = (job.terminal ? "<p>已經打開終端機，照視窗裡的說明在瀏覽器登入。完成後這裡會自動變成已連接。</p>"
+                         : "<p>瀏覽器會出現 Claude 的登入頁。登入並按「Authorize」，這裡會自動變成已連接。</p>") +
+      '<p class="muted small">登入完全在 Anthropic 的流程裡完成，app 不會經手你的帳號資料。</p>' +
+      '<div class="cn-acts"><button class="ghost" data-cn="claude-connect">再開一次登入頁</button>' +
+      (job.terminal ? "" : '<button class="ghost" data-cn="claude-terminal">瀏覽器沒出現？改用終端機登入</button>') + "</div>";
   } else {
     state = c.installed ? "還沒登入" : "還沒安裝"; cls = "off";
     body = "<p>用你的 Claude 訂閱（Pro、Max）回答問題、整理知識庫。</p>" +
       '<div class="cn-acts"><button class="primary" data-cn="claude-connect">連接 Claude</button></div>' +
       '<p class="muted small">' + (c.installed ? "" : "會先用 Anthropic 官方安裝程式裝好 Claude Code（不用管理員密碼），") +
-      "接著打開終端機和瀏覽器，讓你在 Claude 的網頁登入。app 不會看到你的帳號資料。</p>";
+      "接著在瀏覽器打開 Claude 的登入頁讓你登入。app 不會看到你的帳號資料。</p>";
   }
   if (job.status === "error" && job.error) body += '<p class="cn-err">' + esc(job.error) + (job.tail ? '<br><span class="small">' + esc(job.tail.slice(-200)) + "</span>" : "") + "</p>";
   return card("Claude", state, cls, body);
@@ -1925,15 +1910,13 @@ function jevCard(j) {
 }
 
 function langCard(l) {
-  const sel = ["auto", "en", "zh-Hant", "zh-Hans"].map(k => '<option value="' + k + '"' + (k === l.wiki ? " selected" : "") + ">" +
-    (k === "auto" ? "自動判斷" : LANG_NAME[k]) + "</option>").join("");
-  const how = { user: "你設定的", wiki: "照知識庫現有頁面的語言", notes: "照大部分筆記的語言", mixed: "筆記混用幾種語言，第一次請 AI 整理時會問你", empty: "還沒有筆記，會用介面語言" }[l.how] || "";
-  const res = l.resolved ? "目前用 <b>" + esc(LANG_NAME[l.resolved]) + "</b>（" + how + "）" : how;
+  LANG_NAME = l.names || LANG_NAME;
+  const how = { wiki: "跟著知識庫現有頁面的語言", notes: "跟著大部分筆記的語言", empty: "還沒有筆記，會用系統的語言" }[l.how] || "";
+  const res = l.resolved ? "知識庫用 <b>" + esc(LANG_NAME[l.resolved] || l.resolved) + "</b>（" + how + "）" : how;
   const det = l.detected ? "筆記：" + (pct(l.detected.notes) || "—") + (Object.keys(l.detected.wiki || {}).length ? "；知識庫：" + pct(l.detected.wiki) : "") : "";
-  const body = '<div class="cn-acts"><label>知識庫的語言 <select id="cn-lang">' + sel + "</select></label></div>" +
-    '<p class="small">' + res + "</p>" + (det ? '<p class="muted small">' + esc(det) + "</p>" : "") +
-    '<p class="muted small">AI 整理出來的頁面用這個語言寫，原文的關鍵詞和引文保留在旁邊；繁體和簡體不會互轉。AI 跟你說話用介面的語言（跟著系統），' +
-    "問答則跟著你提問的語言。只對這個筆記庫有效。</p>";
+  const body = '<p class="small">' + res + "</p>" + (det ? '<p class="muted small">' + esc(det) + "</p>" : "") +
+    '<p class="muted small">全部自動：知識庫已經有頁面就沿用那個語言，還是空的就用大部分筆記的語言。原文的關鍵詞和引文保留在旁邊，繁體和簡體不互轉。' +
+    "AI 跟你說話用系統的語言，問答跟著你提問的語言。</p>";
   return card("語言", "", "", body);
 }
 
@@ -1950,6 +1933,7 @@ async function connectClick(e) {
   const what = t.dataset.cn;
   const run = async (path, body = {}) => { try { return await api(path, body); } catch (err) { toast(err.message); return null; } };
   if (what === "claude-connect") await run("/api/connect/claude/connect");
+  else if (what === "claude-terminal") await run("/api/connect/claude/terminal");
   else if (what === "gpt-start") { if (await run("/api/connect/chatgpt/start")) CN.waitGpt = true; }
   else if (what === "gpt-signout") { if (await dialog("中斷 ChatGPT 連接？", "<p>app 會撤銷並刪除這台電腦上的 ChatGPT 登入。之後可以再連接。</p>", "中斷", true)) await run("/api/connect/chatgpt/signout"); CN.models = null; }
   else if (what === "gpt-models") { const r = await run("/api/connect/chatgpt/models"); if (r) CN.models = r.models; }
@@ -1964,7 +1948,6 @@ async function connectClick(e) {
 }
 document.addEventListener("change", async e => {
   if (e.target.id === "cn-gpt-model") { await api("/api/connect/chatgpt/model", { model: e.target.value }).catch(err => toast(err.message)); }
-  if (e.target.id === "cn-lang") { await api("/api/lang/set", { wiki: e.target.value }).catch(err => toast(err.message)); refreshConnect(); }
 });
 
 // first run: nothing connected yet → show the page once

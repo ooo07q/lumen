@@ -3,8 +3,9 @@ OpenAI's flow for open-source, locally run apps) and their own Jev key.
 
 Rules this follows (checked 2026-11-25):
 - Claude: the app has no login of its own and never touches Claude credentials, login links or codes. It installs
-  Claude Code with Anthropic's own installer, opens Terminal running the unmodified `claude auth login`
-  (Anthropic's own sign-in flow), and reads only `claude auth status`. Usage is billed to the user's own plan.
+  Claude Code with Anthropic's own installer, starts the unmodified `claude auth login` in the background (output
+  discarded: Claude Code opens Anthropic's sign-in page and receives the result itself; no other app is
+  controlled), and reads only `claude auth status`. Usage is billed to the user's own plan.
 - ChatGPT: OpenAI's documented open-source flow (developers.openai.com/siwc/token-sharing-open-source): PKCE in the
   system browser, redirect to http://127.0.0.1:<port>/auth/callback, tokens kept only on this Mac in a 0600 file,
   requests only to api.openai.com/v1 with store=false and stream=true. The Codex CLI's own login is never reused.
@@ -103,11 +104,16 @@ def claude_status():
     out["subscription"] = out.get("method") == "claude.ai"
     j = CLAUDE_JOB
     if j["kind"] == "login" and j["status"] == "waiting":
+        p = j.get("proc")
         if out["logged_in"]:
             j["status"] = "done"
+            _stop_login()
         elif time.time() - j["started"] > 900:  # gave up in the browser: offer the button again
+            _stop_login()
             j["status"] = "idle"
-    out["job"] = {"kind": j["kind"], "status": j["status"], "error": j["error"],
+        elif p is not None and p.poll() is not None:
+            j.update({"status": "error", "error": "登入沒有完成，請再按一次。", "proc": None})
+    out["job"] = {"kind": j["kind"], "status": j["status"], "error": j["error"], "terminal": bool(j.get("terminal")),
                   "tail": j["out"][-300:] if j["kind"] == "install" and j["status"] == "error" else ""}
     return out
 
@@ -145,24 +151,55 @@ def claude_connect():
     return claude_login()
 
 
+def _stop_login():
+    p = CLAUDE_JOB.get("proc")
+    if p and CLAUDE_JOB["kind"] == "login" and p.poll() is None:
+        import signal
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+        except OSError:
+            p.terminate()
+    CLAUDE_JOB["proc"] = None
+
+
 def claude_login():
-    """Sign-in happens entirely in Anthropic's own flow: the app opens Terminal running the official, unmodified
-    `claude auth login`, which opens Anthropic's sign-in page in the browser. The app never reads that window and
-    never sees a login link, code or token; it only polls `claude auth status` until it says logged in."""
+    """Sign-in happens entirely in Anthropic's own flow. The app starts the official, unmodified
+    `claude auth login` in the background with no input and its output thrown away: Claude Code itself opens
+    Anthropic's sign-in page in the browser and itself receives the result on its own local port. The app never
+    sees a login link, code or token, and controls no other app (so macOS asks nothing). It only polls
+    `claude auth status`."""
     exe = claude_bin()
     if not exe:
         return 400, {"error": "還沒安裝 Claude Code"}
-    script = ('tell application "Terminal"\n activate\n do script "%s auth login --claudeai"\nend tell'
-              % shlex.quote(exe).replace("\\", "\\\\").replace('"', '\\"'))
-    r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
-    if r.returncode:
-        CLAUDE_JOB.update({"kind": "login", "status": "error", "error": "打不開終端機：%s" % r.stderr.strip()[:200]})
-        return 500, {"error": CLAUDE_JOB["error"]}
-    CLAUDE_JOB.update({"kind": "login", "status": "waiting", "error": None, "started": time.time()})
+    _stop_login()
+    p = subprocess.Popen([exe, "auth", "login", "--claudeai"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    CLAUDE_JOB.update({"kind": "login", "status": "waiting", "error": None, "started": time.time(), "proc": p})
     return 200, {"ok": True, "step": "login"}
 
 
+def claude_terminal():
+    """The fallback when the browser didn't show the sign-in page: the same official command in a Terminal window
+    the user works in. The app writes a one-line .command file and opens it (an ordinary file open, so macOS
+    asks no permission to control Terminal); it never reads that window."""
+    exe = claude_bin()
+    if not exe:
+        return 400, {"error": "還沒安裝 Claude Code"}
+    _stop_login()
+    path = os.path.join(APP, "Claude login.command")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("#!/bin/sh\n%s auth login --claudeai\n" % shlex.quote(exe))
+    os.chmod(path, 0o700)
+    r = subprocess.run(["open", path], capture_output=True, text=True, timeout=30)
+    if r.returncode:
+        return 500, {"error": "打不開終端機：%s" % r.stderr.strip()[:200]}
+    CLAUDE_JOB.update({"kind": "login", "status": "waiting", "error": None, "started": time.time(), "proc": None,
+                       "terminal": True})
+    return 200, {"ok": True}
+
+
 def claude_cancel():
+    _stop_login()
     p = CLAUDE_JOB.get("proc")
     if p:
         import signal
