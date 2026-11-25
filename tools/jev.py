@@ -32,6 +32,8 @@ Key: TYPESAFE_API_KEY or ~/.config/typesafe/api_key. Stdlib only, run from the v
 """
 import argparse
 import hashlib
+import threading
+import io
 import itertools
 import json
 import os
@@ -482,8 +484,53 @@ TERMS_Q_BASE = {
 }
 
 
+def terms_key(path, mx):
+    """What the new-terms answer depends on: the note, every raw note (their document frequencies) and the wiki's
+    entity and concept pages (names, aliases, summaries)."""
+    h = hashlib.sha1(read(path).encode("utf-8"))
+    for rel in sorted(wiki.raw_files()):
+        try:
+            st = os.stat(os.path.join(wiki.VAULT, rel))
+        except OSError:
+            continue
+        h.update(("%s|%d|%d\n" % (rel, st.st_size, int(st.st_mtime))).encode("utf-8"))
+    for p in sorted(wiki.load_pages(), key=lambda p: p.name):
+        if p.type in ("entity", "concept"):
+            h.update(("%s|%s|%s\n" % (p.name, p.aliases, p.fm.get("summary", ""))).encode("utf-8"))
+    return "%s|%s" % (mx, h.hexdigest()[:20])
+
+
 def cmd_terms(args):
+    """New terms, cached: a second run on an unchanged note (nothing new in raw/ or the wiki) prints the same
+    answer at once instead of measuring the whole library again (~45 s on a 300 KB book)."""
     path = note_path(args.file)
+    rel = os.path.relpath(path, wiki.VAULT)
+    cf = os.path.join(wiki.DATA, "terms_cache.json")
+    key = terms_key(path, args.max)
+    try:
+        cache = json.load(open(cf, encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    if cache.get(rel, {}).get("key") == key:
+        sys.stdout.write(cache[rel]["out"])
+        return
+    buf = io.StringIO()                  # its own buffer, not redirect_stdout: prep runs sections in threads
+    n_failed = FAILED[0]
+    _terms(args, path, buf)
+    sys.stdout.write(buf.getvalue())
+    if FAILED[0] == n_failed:                        # only a complete answer is kept
+        try:
+            cache = json.load(open(cf, encoding="utf-8"))
+        except (OSError, ValueError):
+            cache = {}
+        cache[rel] = {"key": key, "out": buf.getvalue()}
+        tmp = "%s.%d.tmp" % (cf, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+        os.replace(tmp, cf)
+
+
+def _terms(args, path, out_):
     lines = read(path).split("\n")
     body_start = next((i + 1 for i in range(1, len(lines)) if lines[i] == "---"), 0) if lines[0] == "---" else 0
     segs = wiki.segments(lines, [(body_start, len(lines))])
@@ -503,7 +550,7 @@ def cmd_terms(args):
         return {"term": term, "snippets": contexts(text, name_rx(wiki.zh(term))),
                 "candidates": [page_card(p) for p in cands]}, qs
     res = ask_all(terms, q)
-    print("%s: %d new terms checked\n" % (os.path.relpath(path, wiki.VAULT), len(terms)))
+    out_.write("%s: %d new terms checked\n\n" % (os.path.relpath(path, wiki.VAULT), len(terms)))
     out = defaultdict(list)
     for term, a in res:
         if a is None:
@@ -524,7 +571,7 @@ def cmd_terms(args):
               "same as an existing page (link it; alias only if §2 allows)", "check (maybe an artefact)",
               "conversion artefact (fix silently, no page)", "ignore"):
         if out[k]:
-            print("%s:\n  %s" % (k, "、".join(out[k])))
+            out_.write("%s:\n  %s\n" % (k, "、".join(out[k])))
 
 
 # ------------------------------------------------------------ phrases
@@ -1036,21 +1083,26 @@ def rate_paragraphs(path, paras, title):
     return [(mine[key(pr)][0], pr["sents"][min(mine[key(pr)][1], len(pr["sents"]) - 1)]) for pr in paras]
 
 
-def key_lines(path, coverage=KEY_COVERAGE):
+def key_lines(path, coverage=KEY_COVERAGE, part=None):
     """The lines (0-based) of a note's key passages: its paragraphs from the most central down until they carry
     `coverage` of the note's key-point weight (a paragraph weighs what Jev rates it above "background": 0 for
     filler and background, 1 for a substantive claim, 2 for a central one), plus its headings. Length plays no
-    part. Returns (lines, stats)."""
+    part. `part` ("A-B", 1-based lines): only that part of the note (a chapter of a book organised a part at a
+    time); the coverage is then of the part's key points. Returns (lines, stats)."""
     lines = read(path).split("\n")
     fm, _, _ = wiki.parse_frontmatter("\n".join(lines))
     title = str(fm.get("title") or os.path.splitext(os.path.basename(path))[0])
-    paras, heads, _, _ = note_paragraphs(lines)
+    paras, heads, _, _ = note_paragraphs(lines, part)
     rated = rate_paragraphs(path, paras, title)
     weight = [max(ev - 1, 0) for ev, _ in rated]
-    if sum(weight) < 0.5:              # Jev finds no substantive paragraph: nothing to choose by, the note as it is
-        return set(range(len(lines))), {"paragraphs": len(paras), "kept": len(paras), "coverage": 1.0,
-                                        "tokens_kept": wiki.est_tokens("\n".join(lines)),
-                                        "tokens": wiki.est_tokens("\n".join(lines))}
+    span = range(len(lines))
+    if part:
+        a, _, b = part.partition("-")
+        span = range(max(int(a) - 1, 0), min(int(b or len(lines)), len(lines)))
+    if sum(weight) < 0.5:              # Jev finds no substantive paragraph: nothing to choose by, the text as it is
+        whole = "\n".join(lines[i] for i in span)
+        return set(span), {"paragraphs": len(paras), "kept": len(paras), "coverage": 1.0,
+                           "tokens_kept": wiki.est_tokens(whole), "tokens": wiki.est_tokens(whole)}
     total = sum(weight)
     keep, got = set(), 0.0
     for w, pr in sorted(zip(weight, paras), key=lambda x: -x[0]):
@@ -1064,8 +1116,8 @@ def key_lines(path, coverage=KEY_COVERAGE):
         end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
         keep |= set(range(end + 1))
     return keep, {"paragraphs": len(paras), "kept": kept, "coverage": round(got / total, 2),
-                  "tokens_kept": wiki.est_tokens("\n".join(lines[i] for i in keep)),
-                  "tokens": wiki.est_tokens("\n".join(lines))}
+                  "tokens_kept": wiki.est_tokens("\n".join(lines[i] for i in keep if i in span)),
+                  "tokens": wiki.est_tokens("\n".join(lines[i] for i in span))}
 
 
 def cmd_skim(args):
@@ -1351,6 +1403,44 @@ def essay_pending(rel, pages=None):
 
 # ---------------------------------------------------------- prep, lint
 
+class _ThreadOut:
+    """sys.stdout while prep's sections run at once: each thread writes to its own buffer, printed in order."""
+    def __init__(self, real):
+        self.real, self.local = real, threading.local()
+
+    def write(self, x):
+        buf = getattr(self.local, "buf", None)
+        return (buf or self.real).write(x)
+
+    def flush(self):
+        if getattr(self.local, "buf", None) is None:
+            self.real.flush()
+
+
+def sections_at_once(items):
+    """Run (title, fn, ns) sections in parallel (Jev's waits overlap the library scans) and print them in the
+    given order: the same report as running them one after another."""
+    real = sys.stdout
+    out = _ThreadOut(real)
+    sys.stdout = out
+
+    def one(it):
+        out.local.buf = io.StringIO()
+        try:
+            section(*it)
+            return out.local.buf.getvalue()
+        finally:
+            out.local.buf = None
+    try:
+        with ThreadPoolExecutor(len(items) or 1) as ex:
+            texts = list(ex.map(one, items))
+    finally:
+        sys.stdout = real
+    for t in texts:
+        real.write(t)
+    real.flush()
+
+
 def section(title, fn, ns):
     """Run one command inside prep/lint; a failure ends that section only."""
     print("\n" + "=" * 8 + " " + title + " " + "=" * max(4, 60 - len(title)))
@@ -1379,18 +1469,27 @@ def cmd_prep(args):
             print("!! an essay whose sources aren't ingested yet: ingest these first, then the essay,\n"
                   "   so its pages can cite the sources themselves, not only the essay:")
             print("\n".join("   " + t for t in todo))
-    section("map (wiki.py outline)", wiki.cmd_outline, ns(file=rel, hits=False, skim=False, lines=None))
+    part = getattr(args, "lines", None)                  # one part of a long note (a chapter): map and skim of it
+    items = [("map (wiki.py outline)", wiki.cmd_outline, ns(file=rel, hits=False, skim=False, lines=part))]
     if wiki.scan_images(read(path)):
-        section("web images", cmd_images, ns(file=rel))
-    section("pages the note mentions", cmd_hits, ns(file=rel, max=args.max))
-    section("new terms", cmd_terms, ns(file=rel, max=args.max))
-    section("not_aliases phrases", cmd_phrases, ns(file=rel))
+        items.append(("web images", cmd_images, ns(file=rel)))
+    items += [("pages the note mentions", cmd_hits, ns(file=rel, max=args.max)),
+              ("new terms", cmd_terms, ns(file=rel, max=args.max)),
+              ("not_aliases phrases", cmd_phrases, ns(file=rel))]
+    tail = None
     if total > wiki.READ_WHOLE:
-        sk = wiki.est_tokens(read(path)) * wiki.SKIM_RATIO
-        if sk <= wiki.READ_BUDGET:
-            section("skim (Jev)", cmd_skim, ns(file=rel, lines=None))
+        if part:
+            a, _, b = part.partition("-")
+            sk = wiki.est_tokens("\n".join(read(path).split("\n")[int(a) - 1:int(b or 10 ** 9)])) * wiki.SKIM_RATIO
         else:
-            print("\n(skim: VERY LONG note; pick sections from the map and run `jev.py skim %s --lines A-B`)" % rel)
+            sk = wiki.est_tokens(read(path)) * wiki.SKIM_RATIO
+        if sk <= wiki.READ_BUDGET:
+            items.append(("skim (Jev)", cmd_skim, ns(file=rel, lines=part)))
+        else:
+            tail = "\n(skim: VERY LONG note; pick sections from the map and run `jev.py skim %s --lines A-B`)" % rel
+    sections_at_once(items)
+    if tail:
+        print(tail)
 
 
 def cmd_lint(args):
@@ -1532,6 +1631,7 @@ def main():
     pr = sub.add_parser("prep")
     pr.add_argument("file")
     pr.add_argument("--max", type=int, default=40)
+    pr.add_argument("--lines", help="A-B: one part of a long note (a chapter): its map and skim")
     lt = sub.add_parser("lint")
     lt.add_argument("--all", action="store_true", help="list everything unresolved, not only what is new")
     co = sub.add_parser("contradictions")

@@ -597,27 +597,27 @@ def units(text):
 
 
 def library_df(want, library):
-    """Document frequency in raw/ of the candidate terms `want` (and of CJK bigrams, for the piece test),
-    looking only for those terms instead of listing every gram of every file."""
-    cjk_want = [g for g in want if CJK_RUN.fullmatch(g)]
-    words1 = {g for g in want if " " not in g} - set(cjk_want)
+    """Document frequency in raw/ of the candidate terms `want`, looking only for those terms instead of listing
+    every gram of every file. A CJK term is looked for only in files that have all its characters; a phrase is
+    found as words in a row."""
+    cjk_want = [(g, set(g)) for g in want if CJK_RUN.fullmatch(g)]
+    words1 = {g for g in want if " " not in g} - {g for g, _ in cjk_want}
     phrases = {g for g in want if " " in g}
-    firsts = {g.split(" ")[0] for g in phrases}
-    df, bigram = Counter(), Counter()
+    df = Counter()
     for text in library:
         t = CJK_GAP.sub("", text).replace("’", "'").replace("ſ", "s")
-        runs = CJK_RUN.findall(t)
+        runs = CJK_RUN.findall(t) if cjk_want else None
         if runs:
             cjk = "\n".join(runs)
-            df.update(g for g in cjk_want if g in cjk)
-            bigram.update({r[i:i + 2] for r in runs for i in range(len(r) - 1)})
+            chars = set(cjk)
+            df.update(g for g, cs in cjk_want if cs <= chars and g in cjk)
         w = [x.lower() for x in LATIN_WORD.findall(t)]
         found = words1 & set(w)
-        for i, x in enumerate(w):
-            if x in firsts:
-                found |= phrases & {" ".join(w[i:i + 2]), " ".join(w[i:i + 3])}
+        if phrases:
+            joined = " " + " ".join(w) + " "
+            found |= {g for g in phrases if " " + g + " " in joined}
         df.update(found)
-    return df, bigram
+    return df, None
 
 
 RARE = 0.05   # "rare in raw/": in at most 5% of raw files
@@ -731,6 +731,61 @@ def reading_ranges(lines, lines_arg=None):
     return body_start, heads, pages, refs, appendix, ranges
 
 
+PART_OVER = 10000      # a note longer than this (tokens) is organised in parts: its chapters, or ~PART_TARGET portions
+PART_TARGET = 6000     # (a test, 2026-11: three chapters in one run caught 51% of the key points, one by one 80%)
+PART_MIN = 1500        # a chapter shorter than this goes with the next one
+
+
+def note_parts(lines):
+    """A long note's parts for organising it a part at a time: [(title or None, start, end)] as 1-based line
+    ranges, or [] when the note is short enough for one run. Its chapters where it has headings (the highest
+    level with two or more; short ones merged into the next; very long ones cut further); else portions of about
+    PART_TARGET tokens at paragraph breaks (books converted without headings can't be split by chapter)."""
+    body_start, heads, _, _, _, ranges = reading_ranges(lines)
+    end = ranges[0][1]                                     # body up to the references
+    tok = lambda a, b: est_tokens("\n".join(lines[a - 1:b]))
+    if tok(body_start + 1, end) <= PART_OVER:
+        return []
+    heads = [h for h in heads if h[0] <= end]
+    levels = sorted({lv for _, lv, _ in heads})
+    lv = next((x for x in levels if sum(1 for h in heads if h[1] == x) >= 2), None)
+    chunks = []
+    if lv is not None:
+        cuts = [h for h in heads if h[1] == lv]
+        starts = [body_start + 1] + [c[0] for c in cuts]
+        titles = [None] + [c[2] for c in cuts]
+        for i, a in enumerate(starts):
+            b = (starts[i + 1] - 1) if i + 1 < len(starts) else end
+            if b >= a and lines[a - 1:b] and any(x.strip() for x in lines[a - 1:b]):
+                chunks.append([titles[i], a, b])
+        merged = []
+        for c in chunks:                                    # short pieces (a preface, a title page) join the next
+            if merged and tok(merged[-1][1], merged[-1][2]) < PART_MIN:
+                merged[-1] = [merged[-1][0] or c[0], merged[-1][1], c[2]]
+            else:
+                merged.append(c)
+        if len(merged) > 1 and tok(merged[-1][1], merged[-1][2]) < PART_MIN:
+            merged[-2][2] = merged[-1][2]
+            merged.pop()
+        chunks = merged if len(merged) >= 2 else []
+    out = []
+    for title, a, b in chunks or [[None, body_start + 1, end]]:
+        if tok(a, b) <= 2 * PART_TARGET:
+            out.append((title, a, b))
+            continue
+        # cut at blank lines into ~PART_TARGET pieces
+        k = max(2, round(tok(a, b) / PART_TARGET))
+        step = tok(a, b) / k
+        cur, acc = a, 0
+        for i in range(a, b + 1):
+            acc += est_tokens(lines[i - 1]) + 0.25
+            if acc >= step and not lines[i - 1].strip() and b - i > 5 and len(out) < 999:
+                out.append((title, cur, i))
+                cur, acc = i + 1, 0
+        out.append((title, cur, b))
+    return out if len(out) >= 2 else []
+
+
 def cmd_outline(args):
     """Print a compact map of a raw file so a long source can be read in parts (Read with offset/limit)."""
     path = args.file if os.path.isabs(args.file) else os.path.join(VAULT, args.file)
@@ -738,11 +793,13 @@ def cmd_outline(args):
     total = est_tokens("\n".join(lines))
     body_start, heads, pages, refs, appendix, ranges = reading_ranges(lines, args.lines)
     segs = segments(lines, ranges)
-    library = raw_texts(skip=path) if (total > READ_WHOLE or args.skim or args.hits) else []
-    sk = skim(lines, segs, library) if (total > READ_WHOLE or args.skim) else []
-    # how to read it: whole up to READ_WHOLE; else skim it whole if the skim fits; else skim chosen sections
+    library = raw_texts(skip=path) if (args.skim or args.hits) else []
+    sk = skim(lines, segs, library) if args.skim else []
+    # how to read it: whole up to READ_WHOLE; else skim it whole if the skim fits; else skim chosen sections.
+    # The word-statistics skim is computed only when asked for (--skim): for the reading mode, its size is
+    # ~SKIM_RATIO of the text (it took ~25 s on a 300 KB book, for one number)
     if total > READ_WHOLE:
-        sk_all = est_tokens("\n".join(sk))
+        sk_all = est_tokens("\n".join(sk)) if args.skim else int(total * SKIM_RATIO)
         mode = ("LONG: skim it whole (~%d tokens), then read the key parts in full" % sk_all
                 if sk_all <= READ_BUDGET else
                 "VERY LONG: its skim is ~%d tokens; pick sections (headings, --hits) to skim, up to ~%d"

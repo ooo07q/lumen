@@ -1532,11 +1532,18 @@ const CLAUDE_MODELS = [["auto", "Claude：自動（Jev 選）"], ["haiku", "Clau
 const GPT_TIER = { fast: "快、省", balanced: "一般", strong: "最強、最耗額度" };
 let GPT_MODELS = [];          // the models the user's ChatGPT plan offers, from its catalogue (costs no usage)
 const isGpt = m => String(m || "").startsWith("chatgpt");
+const CONN = { known: false, claude: false, chatgpt: false };   // which AIs are connected: the menu offers only those
+function setConn(st) {
+  const was = CONN.known + "," + CONN.claude + "," + CONN.chatgpt;
+  Object.assign(CONN, { known: true, claude: !!st.claude.connected, chatgpt: !!st.chatgpt.connected });
+  if (was !== CONN.known + "," + CONN.claude + "," + CONN.chatgpt && $("#ai-model")) renderAI();
+}
 function aiModels() {
   const gpt = [["chatgpt", "ChatGPT：自動（Jev 選）"]].concat(GPT_MODELS.map(m =>
     ["chatgpt:" + m.slug, "ChatGPT " + m.name + "：" + GPT_TIER[m.tier] + (m.legacy ? "（舊版）" : "")]));
-  const all = CLAUDE_MODELS.concat(gpt);
-  if (!all.some(([v]) => v === aiModel()) && isGpt(aiModel())) all.push([aiModel(), "ChatGPT " + aiModel().slice(8)]);
+  if (CONN.known && !CONN.claude && !CONN.chatgpt) return [[aiModel(), "還沒連接 AI"]];
+  const all = (!CONN.known || CONN.claude ? CLAUDE_MODELS : []).concat(!CONN.known || CONN.chatgpt ? gpt : []);
+  if (!all.some(([v]) => v === aiModel()) && isGpt(aiModel()) && CONN.chatgpt) all.push([aiModel(), "ChatGPT " + aiModel().slice(8)]);
   return all;
 }
 async function loadGptModels() {
@@ -1648,7 +1655,8 @@ const KIND = { created: "新", changed: "改", deleted: "刪" };
 function stepsHtml(t, phase) {
   const st = t.steps.filter(x => x.phase === phase);
   if (!st.length) return "";
-  const row = x => '<div class="ag-step' + (x.ok === false ? " bad" : "") + '">' + (x.ok === false ? "✗ " : x.ok ? "· " : "… ") + esc(x.what) + "</div>";
+  const secs = x => x.secs >= 1 ? '<span class="muted"> · ' + (x.secs >= 90 ? Math.round(x.secs / 60) + " 分" : Math.round(x.secs) + " 秒") + "</span>" : "";
+  const row = x => '<div class="ag-step' + (x.ok === false ? " bad" : "") + '">' + (x.ok === false ? "✗ " : x.ok ? "· " : "… ") + esc(x.what) + secs(x) + "</div>";
   const live = (phase === "plan" ? t.status === "planning" : t.status === "acting");
   if (live) return '<div class="ag-steps">' + st.slice(-AGENT_STEPS).map(row).join("") + "</div>";
   return '<details class="ag-steps"><summary>' + (phase === "plan" ? "讀了、查了 " : "做了 ") + st.length + " 步</summary>" + st.map(row).join("") + "</details>";
@@ -1688,6 +1696,10 @@ function agentHtml(t) {
     if ((t.outside || []).length) h += '<div class="banner">注意：這段時間知識庫以外也有檔案變了（可能是你自己改的）：' + t.outside.slice(0, 5).map(esc).join("、") + "</div>";
     if (ch.length && !t.undone) h += '<div class="ai-acts"><button data-ag-undo="' + esc(t.id) + '">全部復原</button></div>';
   }
+  if (t.status === "done" && t.part && t.part.next && !t.undone)
+    h += '<p class="muted small">這篇很長，一次整理一部分（第 ' + (t.part.i + 1) + " 部分，共 " + t.part.n + "），每部分的重點抓得比整篇一次完整。</p>" +
+      '<div class="ai-acts"><button class="primary" data-ag-next="' + esc(t.part.path) + '" data-ag-part="' + t.part.next.i + '">整理下一部分：' + esc(t.part.next.name) + "</button></div>";
+  else if (t.status === "done" && t.part && !t.part.next) h += '<p class="muted small">這篇的 ' + t.part.n + " 個部分都整理過了。</p>";
   if (t.status === "error") h += '<div class="banner">沒有完成：' + esc(t.error || "") + (/log ?in|login|auth|登入/i.test(t.error || "") ? "。在終端機打 <code>claude</code> 登入後再試。" : "") + "</div>";
   if (t.status === "stopped") h += '<div class="ai-meta">已停止。' + ((t.changes || []).length ? "" : "") + "</div>";
   if (t.status === "cancelled") h += '<div class="ai-meta">沒有執行。</div>';
@@ -1776,6 +1788,7 @@ $("#ai").addEventListener("click", e => {
     return startAgent("analysis", { q: t.q, answer: t.text, sources: (t.used || []).map(u => u.path) });
   }
   if (b.dataset.ingest) return startAgent("ingest", { path: b.dataset.ingest });
+  if (b.dataset.agNext) return startAgent("ingest", { path: b.dataset.agNext, part: +b.dataset.agPart });
   if (b.dataset.agGo) {
     const note = (b.closest(".ai-a").querySelector(".ag-note") || {}).value || "";
     const t = AI.turns.find(x => x.id === b.dataset.agGo);
@@ -1855,6 +1868,7 @@ async function refreshConnect() {
   const cj = st.claude.job || {};
   if (cj.status === "running" || (cj.status === "waiting" && !st.claude.logged_in)) CN.timer = setTimeout(refreshConnect, 2000);
   // the answer box uses whichever AI is connected, without asking
+  setConn(st);
   if (st.chatgpt.connected && !st.claude.connected && !isGpt(aiModel())) setPref("aiModel", "chatgpt");
   if (!st.chatgpt.connected && st.claude.connected && isGpt(aiModel())) setPref("aiModel", "auto");
   if (st.chatgpt.connected && !GPT_MODELS.length) loadGptModels();
@@ -2006,6 +2020,9 @@ async function connectClick(e) {
 (async () => {
   try {
     const st = await api("/api/connect/status");
+    if (st.chatgpt.connected && !st.claude.connected && !isGpt(aiModel())) setPref("aiModel", "chatgpt");
+    if (!st.chatgpt.connected && st.claude.connected && isGpt(aiModel())) setPref("aiModel", "auto");
+    setConn(st);
     if (st.chatgpt.connected) loadGptModels();
     if (store.get("connect-seen", false)) return;
     if (!(st.claude.connected || st.chatgpt.connected)) showConnect();

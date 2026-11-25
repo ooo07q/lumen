@@ -1815,7 +1815,8 @@ def mcp_env(job, phase):
     env = {"NOTES_VAULT": VAULT, "NOTES_DATA": wiki.DATA, "NOTES_AGENT_PHASE": mphase,
            "NOTES_AGENT_JEV": "1" if job["jev"] else "0", "NOTES_AGENT_TASK": job["task"],
            "NOTES_AGENT_FILES": "1" if job["mode"] == "app" else "0", "NOTES_AGENT_RUN": job["session"],
-           "NOTES_AGENT_WHOLE": "1" if job.get("whole") else "0", "PYTHONIOENCODING": "utf-8"}
+           "NOTES_AGENT_WHOLE": "1" if job.get("whole") else "0", "PYTHONIOENCODING": "utf-8",
+           "NOTES_AGENT_NOTE": job.get("path") or "", "NOTES_AGENT_PART": (job.get("part") or {}).get("lines", "")}
     for k in ("TYPESAFE_API_KEY", "HOME", "PATH", "NOTES_READ_WHOLE"):
         if os.environ.get(k):
             env[k] = os.environ[k]
@@ -1900,7 +1901,9 @@ def run_agent_phase(job, phase, message):
             elif d.get("type") == "user":
                 for b in (d.get("message") or {}).get("content") or []:
                     if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
-                        pending.pop(b["tool_use_id"])["ok"] = not b.get("is_error")
+                        it = pending.pop(b["tool_use_id"])
+                        it["ok"] = not b.get("is_error")
+                        it["secs"] = round(time.time() - it.get("t0", time.time()), 1)
             elif d.get("type") == "result":
                 job["cost"] += float(d.get("total_cost_usd") or 0)
                 job["denied"] += len(d.get("permission_denials") or [])
@@ -1968,16 +1971,22 @@ def lean_context(job):
         # the note (api_agent_start checked it is one of the user's notes, not the journal): whole when short;
         # else its key passages, as the agent's read tool gives them (Jev's ratings, ~80% of the key points)
         lines = open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read().split("\n")
-        total = wiki.est_tokens("\n".join(lines))
+        pl = (job.get("part") or {}).get("lines")
+        span = range(len(lines))
+        if pl:                                     # one part of a long note: only its lines
+            pa, _, pb = pl.partition("-")
+            span = range(int(pa) - 1, min(int(pb), len(lines)))
+        total = wiki.est_tokens("\n".join(lines[i] for i in span))
         if total <= wiki.READ_WHOLE or job.get("whole"):
-            note, how = "\n".join(lines), "whole"
+            note, how = "\n".join("%6d\t%s" % (i + 1, lines[i]) for i in span) if pl else "\n".join(lines), "whole"
         else:
             try:
-                keep, st = jev.key_lines(os.path.join(VAULT, rel))
+                keep, st = jev.key_lines(os.path.join(VAULT, rel), part=pl)
+                keep = {k for k in keep if k in span}
                 cov = "the paragraphs Jev rates as carrying %d%% of its key points (%d of %d paragraphs) and its " \
                       "headings" % (round(st["coverage"] * 100), st["kept"], st["paragraphs"])
-            except Exception:                     # noqa: BLE001 - Jev off or failing: the whole note
-                keep, cov = set(range(len(lines))), "the whole note (Jev couldn't pick the key passages)"
+            except Exception:                     # noqa: BLE001 - Jev off or failing: the whole note (or part)
+                keep, cov = set(span), "the whole text (Jev couldn't pick the key passages)"
             out, last = [], -2
             for k in sorted(keep):
                 if k != last + 1:
@@ -1987,7 +1996,8 @@ def lean_context(job):
             note = "\n".join(out)
             how = ("its key passages: %s (line-numbered); say on the source page that it was read in key passages"
                    % cov)
-        parts.append("# The note `%s` (~%d tokens; %s)\n\n%s" % (rel, total, how, note))
+        where = (" — part %d of %d, %s, lines %s" % (job["part"]["i"] + 1, job["part"]["n"], job["part"]["name"], pl)) if pl else ""
+        parts.append("# The note `%s`%s (~%d tokens; %s)\n\n%s" % (rel, where, total, how, note))
         body = re.sub(r"^---\n.*?\n---\n", "", open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read(), flags=re.S)
         q = "Which wiki pages cover what this note is about? %s: %s" % (os.path.basename(rel)[:-3], re.sub(r"\s+", " ", body)[:1500])
         found, _ = t.call("jev_query", {"question": q, "n": 10}) if job["jev"] else t.call("search", {"query": q[:300], "n": 10})
@@ -2390,7 +2400,58 @@ def agent_act(job, note):
         job["report"] = job["text"]
         V.fresh()
     job["status"] = "stopped" if job["stopped"] else "error" if job["error"] else "done"
+    if job["status"] == "done" and job.get("part") and job.get("changes"):
+        try:
+            mark_part_done(job["path"], job["part"]["parts"], job["part"]["i"])
+        except OSError:
+            pass
     job["seconds"] = round(time.time() - job["started"], 1)
+
+
+def parts_file():
+    return os.path.join(wiki.DATA, "parts.json")
+
+
+def note_parts(rel):
+    """A long note's parts (chapters, or ~6k-token portions where it has no headings), [] for one run."""
+    lines = open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read().split("\n")
+    return wiki.note_parts(lines)
+
+
+def parts_done(rel, parts):
+    """The parts of `rel` already organised (indexes), as long as the note's parts are still the same."""
+    try:
+        d = json.load(open(parts_file(), encoding="utf-8")).get(rel) or {}
+    except (OSError, ValueError):
+        return set()
+    return set(d.get("done") or []) if d.get("sig") == parts_sig(parts) else set()
+
+
+def parts_sig(parts):
+    return hashlib.sha1(json.dumps(parts).encode("utf-8")).hexdigest()[:12]
+
+
+def mark_part_done(rel, parts, i):
+    try:
+        all_ = json.load(open(parts_file(), encoding="utf-8"))
+    except (OSError, ValueError):
+        all_ = {}
+    d = all_.get(rel) or {}
+    done = set(d.get("done") or []) if d.get("sig") == parts_sig(parts) else set()
+    all_[rel] = {"sig": parts_sig(parts), "done": sorted(done | {i}), "n": len(parts)}
+    tmp = parts_file() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(all_, f, ensure_ascii=False)
+    os.replace(tmp, parts_file())
+
+
+def part_name(parts, i):
+    """How the user and the AI call part i: its chapter title, numbered when a long chapter is cut further."""
+    title = parts[i][0]
+    if not title:
+        return "第 %d 部分（共 %d）" % (i + 1, len(parts))
+    same = [k for k, p in enumerate(parts) if p[0] == title]
+    return title if len(same) == 1 else "%s（%d/%d）" % (title, same.index(i) + 1, len(same))
 
 
 def note_title(rel):
@@ -2419,13 +2480,34 @@ def api_agent_start(body):
             return 400, {"error": "日記不交給 AI"}
         title = note_title(rel)
         src = v.source_of.get(rel)
-        text = "Task: ingest the note `%s`." % rel
-        if body.get("whole"):
-            text += " The user asked for it to be read whole."
-        if src:
-            text += " It already has a source page, [[%s]]: update that page and the pages it touched with " \
-                    "what is new or was missed, instead of making another source page." % src
-        label = "整理「%s」" % title
+        # a long note goes a part at a time (its chapters, or ~6k-token portions): one run per part caught far
+        # more of a book's key points than one run over all of it, for about the same key points per token
+        parts = [] if body.get("whole") else note_parts(rel)
+        part = None
+        if parts:
+            done = parts_done(rel, parts)
+            want = body.get("part")
+            part = int(want) if isinstance(want, int) and 0 <= want < len(parts) else \
+                next((i for i in range(len(parts)) if i not in done), 0)
+        if part is not None:
+            pt, a, b = parts[part]
+            name = part_name(parts, part)
+            text = ("Task: ingest part %d of %d of the note `%s`: %s, lines %d-%d. The note is long, so it is "
+                    "organised a part at a time: this run covers only these lines (the tools give you only them). "
+                    "Write a source page for this part, titled `%s — %s`, with `source_path` the note and "
+                    "`part: \"%d/%d\"` in its frontmatter; it links the other parts' pages where they exist. Update "
+                    "the pages this part bears on. The other parts get their own runs."
+                    % (part + 1, len(parts), rel, ("\"%s\"" % pt) if pt else "a portion of the text", a, b,
+                       title, pt or "Part %d" % (part + 1), part + 1, len(parts)))
+            label = "整理「%s」：%s" % (title, name)
+        else:
+            text = "Task: ingest the note `%s`." % rel
+            if body.get("whole"):
+                text += " The user asked for it to be read whole."
+            if src:
+                text += " It already has a source page, [[%s]]: update that page and the pages it touched with " \
+                        "what is new or was missed, instead of making another source page." % src
+            label = "整理「%s」" % title
     elif task == "analysis":
         q, answer = str(body.get("q") or "").strip(), str(body.get("answer") or "").strip()
         if not q or not answer:
@@ -2460,13 +2542,23 @@ def api_agent_start(body):
     job = AGENT_JOBS[jid] = {
         "id": jid, "task": task, "label": label, "task_text": text, "bin": exe, "model": model, "effort": effort,
         "jev": bool(body.get("jev")) and has_jev(), "session": str(uuid.uuid4()), "status": "planning",
-        "steps": [], "text": "", "message": "", "plan": None, "report": "", "changes": [], "outside": [],
+        "steps": StepList(), "text": "", "message": "", "plan": None, "report": "", "changes": [], "outside": [],
         "error": None, "stopped": False, "proc": None, "cost": 0.0, "denied": 0, "started": time.time(),
         "undone": False, "vault": VAULT, "ui_lang": ui_lang(body.get("ui_lang")), "provider": provider, "mode": mode,
         "path": rel if task == "ingest" else None, "conv": [], "tokens": {"in": 0, "cached": 0, "out": 0},
         "whole": bool(body.get("whole"))}
+    if task == "ingest" and part is not None:
+        job["part"] = {"i": part, "n": len(parts), "lines": "%d-%d" % (parts[part][1], parts[part][2]),
+                       "name": part_name(parts, part), "parts": parts}
     threading.Thread(target=agent_plan, args=(job,), daemon=True).start()
     return 200, {"id": jid}
+
+
+class StepList(list):
+    """A run's steps; each one is stamped with when it started (agent_view turns that into its time)."""
+    def append(self, item):
+        item.setdefault("t0", time.time())
+        super().append(item)
 
 
 def agent_view(job):
@@ -2475,6 +2567,25 @@ def agent_view(job):
     out = {k: job.get(k) for k in keys}
     if job["status"] in ("planning", "acting"):
         out["live"] = job["text"]
+    pt = job.get("part")
+    if pt:
+        out["part"] = {"i": pt["i"], "n": pt["n"], "name": pt["name"], "path": job["path"]}
+        if job["status"] == "done":
+            done = parts_done(job["path"], pt["parts"])
+            nxt = next((i for i in range(pt["i"] + 1, pt["n"]) if i not in done),
+                       next((i for i in range(pt["n"]) if i not in done), None))
+            if nxt is not None:
+                out["part"]["next"] = {"i": nxt, "name": part_name(pt["parts"], nxt)}
+    # each step's time: from its start to its end (or to the next step's start)
+    steps, end = [], time.time() if job["status"] in ("planning", "acting") else job["started"] + (job.get("seconds") or 0)
+    for k, x in enumerate(job["steps"]):
+        y = dict(x)
+        if "secs" not in y and y.get("t0") and y.get("ok") is not None:
+            nxt_t = next((z.get("t0") for z in job["steps"][k + 1:] if z.get("t0")), None) or end
+            y["secs"] = round(max(nxt_t - y["t0"], 0), 1)
+        y.pop("t0", None)
+        steps.append(y)
+    out["steps"] = steps
     return out
 
 

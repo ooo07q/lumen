@@ -312,7 +312,9 @@ def claude_terminal():
     _stop_login()
     path = os.path.join(APP, "Claude login.command")
     with open(path, "w", encoding="utf-8") as f:
-        f.write("#!/bin/sh\n%s auth login --claudeai\n" % shlex.quote(exe))
+        f.write("#!/bin/sh\necho '登入 Claude Code：瀏覽器會打開 Anthropic 的登入頁（如果你剛才關掉了，會再開一次）。'\n"
+                "echo '在那裡登入並按 Authorize；如果瀏覽器沒有打開，照下面的說明複製網址。'\necho\n"
+                "%s auth login --claudeai\n" % shlex.quote(exe))
     os.chmod(path, 0o700)
     r = subprocess.run(["open", path], capture_output=True, text=True, timeout=30)
     if r.returncode:

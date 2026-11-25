@@ -35,6 +35,14 @@ TASK = os.environ.get("NOTES_AGENT_TASK", "")
 FILES = os.environ.get("NOTES_AGENT_FILES") == "1" or PHASE == "lean"
 RUN = os.environ.get("NOTES_AGENT_RUN", "")
 WHOLE = os.environ.get("NOTES_AGENT_WHOLE") == "1"          # the user asked for the note to be read whole
+# a long note organised a part at a time: this run covers lines PART ("A-B") of the note NOTE only
+NOTE = os.environ.get("NOTES_AGENT_NOTE", "")
+PART = os.environ.get("NOTES_AGENT_PART", "")
+
+
+def part_of(rel):
+    """This run's part ("A-B") when `rel` is the note being organised a part at a time, else None."""
+    return PART if PART and NOTE and os.path.normpath(rel) == os.path.normpath(NOTE) else None
 MAX_OUT = 60000
 
 
@@ -101,16 +109,19 @@ def t_search(a):
 
 
 def t_outline(a):
-    return run(wiki.cmd_outline, file=os.path.join(wiki.VAULT, note_file(a["file"])), hits=bool(a.get("hits")),
-               skim=bool(a.get("skim")), lines=a.get("lines"))
+    rel = note_file(a["file"])
+    return run(wiki.cmd_outline, file=os.path.join(wiki.VAULT, rel), hits=bool(a.get("hits")),
+               skim=bool(a.get("skim")), lines=a.get("lines") or part_of(rel))
 
 
 def t_prep(a):
-    return run(jev.cmd_prep, file=os.path.join(wiki.VAULT, note_file(a["file"])), max=40)
+    rel = note_file(a["file"])
+    return run(jev.cmd_prep, file=os.path.join(wiki.VAULT, rel), max=40, lines=part_of(rel))
 
 
 def t_skim(a):
-    return run(jev.cmd_skim, file=os.path.join(wiki.VAULT, note_file(a["file"])), lines=a.get("lines"))
+    rel = note_file(a["file"])
+    return run(jev.cmd_skim, file=os.path.join(wiki.VAULT, rel), lines=a.get("lines") or part_of(rel))
 
 
 def t_query(a):
@@ -134,11 +145,19 @@ def t_read(a):
     a0, _, b0 = str(a.get("lines") or "").partition("-")
     start = max(int(a0), 1) if a0.strip().isdigit() else 1
     end = min(int(b0), len(lines)) if b0.strip().isdigit() else min(len(lines), start + 1999)
+    part = part_of(rel)
+    if part:                                         # this run covers one part of the note: only its lines
+        pa, _, pb = part.partition("-")
+        pa, pb = int(pa), min(int(pb), len(lines))
+        if end < pa or start > pb:
+            raise ValueError("this run covers lines %s of the note only (one part of a long note)" % part)
+        start = max(start, pa)
+        end = min(end if b0.strip().isdigit() else pb, pb)
     keep, note = None, ""
     if not rel.startswith("wiki" + os.sep) and not WHOLE and wiki.est_tokens("\n".join(lines)) > wiki.READ_WHOLE:
         # a long note: its key passages, the paragraphs Jev rates as carrying ~80% of its key points, and headings
         try:
-            keep, st = jev.key_lines(full)
+            keep, st = jev.key_lines(full, part=part)
             note = ("(you get the note's key passages — the paragraphs Jev rates as carrying %d%% of its key "
                     "points, %d of %d paragraphs — and its headings; the rest is left out)\n"
                     % (round(st["coverage"] * 100), st["kept"], st["paragraphs"]))
