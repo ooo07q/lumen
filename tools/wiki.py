@@ -299,7 +299,14 @@ def convert_pdfs():
     print()
 
 
-READ_BUDGET = 35000   # most tokens read in one go: a whole note, or a long note's skim
+READ_BUDGET = 35000   # most tokens read in one go: a long note's skim and key parts
+READ_WHOLE = 4000     # a note up to this is read whole (its skim would be about as long); longer: the skim first
+
+
+def read_part_budget(total):
+    """Tokens of a longer note read in full after its skim (opening, end, key passages): about a third of it,
+    at least READ_WHOLE, at most READ_BUDGET. The whole note only when the user asks."""
+    return int(min(max(total / 3, READ_WHOLE), READ_BUDGET))
 
 
 def est_tokens(text):
@@ -735,17 +742,17 @@ def cmd_outline(args):
     total = est_tokens("\n".join(lines))
     body_start, heads, pages, refs, appendix, ranges = reading_ranges(lines, args.lines)
     segs = segments(lines, ranges)
-    library = raw_texts(skip=path) if (total > READ_BUDGET or args.skim or args.hits) else []
-    sk = skim(lines, segs, library) if (total > READ_BUDGET or args.skim) else []
-    # how to read it: whole up to READ_BUDGET; else skim it whole if the skim fits; else skim chosen sections
-    if total > READ_BUDGET:
+    library = raw_texts(skip=path) if (total > READ_WHOLE or args.skim or args.hits) else []
+    sk = skim(lines, segs, library) if (total > READ_WHOLE or args.skim) else []
+    # how to read it: whole up to READ_WHOLE; else skim it whole if the skim fits; else skim chosen sections
+    if total > READ_WHOLE:
         sk_all = est_tokens("\n".join(sk))
         mode = ("LONG: skim it whole (~%d tokens), then read the key parts in full" % sk_all
                 if sk_all <= READ_BUDGET else
                 "VERY LONG: its skim is ~%d tokens; pick sections (headings, --hits) to skim, up to ~%d"
                 % (sk_all, READ_BUDGET))
     else:
-        mode = "read it whole"
+        mode = "short: read it whole"
     print("%s: ~%d tokens, %d lines -> %s" % (os.path.relpath(path, VAULT), total, len(lines), mode))
     if body_start:
         print("frontmatter: lines 1-%d" % body_start)

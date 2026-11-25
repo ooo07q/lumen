@@ -74,7 +74,7 @@ def load_settings():
 
 
 def save_settings(s):
-    tmp = SETTINGS_FILE + ".tmp"
+    tmp = "%s.%d.%s.tmp" % (SETTINGS_FILE, os.getpid(), secrets.token_hex(3))   # one per writer
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(s, f, ensure_ascii=False, indent=1)
     os.replace(tmp, SETTINGS_FILE)
@@ -580,7 +580,7 @@ def triage_unit(rel):
 
 
 def has_jev():
-    return bool(os.environ.get("TYPESAFE_API_KEY") or os.path.exists(jev.KEY_FILE))
+    return bool(os.environ.get("TYPESAFE_API_KEY") or os.path.exists(jev.KEY_FILE)) and not connect.is_off("jev")
 
 
 def api_tree(q):
@@ -1663,8 +1663,8 @@ def api_ai_ask(body):
         return 400, {"error": "沒有問題"}
     provider = "chatgpt" if body.get("provider") == "chatgpt" else "claude"
     exe = claude_bin()
-    if provider == "claude" and not exe:
-        return 400, {"error": "還沒連接 Claude：到「連接 AI」安裝並登入 Claude Code。", "connect": True}
+    if provider == "claude" and (not exe or connect.is_off("claude")):
+        return 400, {"error": "還沒連接 Claude：到「連接 AI」按「連接 Claude」。", "connect": True}
     if provider == "chatgpt" and not connect.gpt_status()["connected"]:
         return 400, {"error": "還沒連接 ChatGPT：到「連接 AI」按「Continue with ChatGPT」。", "connect": True}
     msg, used, ctx_used = ai_prompt(body)
@@ -1786,23 +1786,39 @@ def agent_facts(job):
                lang_name(job.get("ui_lang") or "en")))
 
 
-def agent_cmd(job, phase):
-    allow, write, deny = agent_rules()
-    env = {"NOTES_VAULT": VAULT, "NOTES_DATA": wiki.DATA, "NOTES_AGENT_PHASE": phase,
-           "NOTES_AGENT_JEV": "1" if job["jev"] else "0", "NOTES_AGENT_TASK": job["task"], "PYTHONIOENCODING": "utf-8"}
+MCP_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "agent_mcp.py")
+
+
+def mcp_env(job, phase):
+    """The app's tool server for this run. Modes: "agent" (Claude Code's own Read/Glob/Grep/Edit/Write, held to
+    the vault by its permission rules, plus these tools), "app" (these tools only: they read and write files
+    themselves), "lean" (the app hands the AI what it reads; the act phase gets only the tools that write)."""
+    mphase = "lean" if job["mode"] == "lean" and phase == "act" else phase
+    env = {"NOTES_VAULT": VAULT, "NOTES_DATA": wiki.DATA, "NOTES_AGENT_PHASE": mphase,
+           "NOTES_AGENT_JEV": "1" if job["jev"] else "0", "NOTES_AGENT_TASK": job["task"],
+           "NOTES_AGENT_FILES": "1" if job["mode"] == "app" else "0", "NOTES_AGENT_RUN": job["session"],
+           "NOTES_AGENT_WHOLE": "1" if job.get("whole") else "0", "PYTHONIOENCODING": "utf-8"}
     for k in ("TYPESAFE_API_KEY", "HOME", "PATH"):
         if os.environ.get(k):
             env[k] = os.environ[k]
-    mcp = {"mcpServers": {"notes": {"command": sys.executable,
-                                    "args": [os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "agent_mcp.py")],
-                                    "env": env}}}
-    tools = "Read,Glob,Grep" + (",Edit,Write" if phase == "act" else "")
+    return env
+
+
+def agent_cmd(job, phase):
+    no_tools = job["mode"] == "lean" and phase == "plan"
+    servers = {} if no_tools else {"notes": {"command": sys.executable, "args": [MCP_SCRIPT], "env": mcp_env(job, phase)}}
     cmd = [job["bin"], "-p", "--output-format", "stream-json", "--verbose",
-           "--setting-sources", "", "--strict-mcp-config", "--mcp-config", json.dumps(mcp),
-           "--add-dir", VAULT, "--tools", tools, "--permission-mode", "dontAsk", "--permission-prompts", "none",
-           "--allowedTools"] + allow + (write if phase == "act" else []) + ["--disallowedTools"] + deny + [
-           "--model", job["model"], "--effort", job["effort"],
-           "--append-system-prompt-file", os.path.join(AGENT_DIR, "instructions.md")]
+           "--setting-sources", "", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": servers}),
+           "--permission-mode", "dontAsk", "--permission-prompts", "none"]
+    if job["mode"] == "agent":
+        allow, write, deny = agent_rules()
+        tools = "Read,Glob,Grep" + (",Edit,Write" if phase == "act" else "")
+        cmd += ["--add-dir", VAULT, "--tools", tools, "--allowedTools"] + allow + (write if phase == "act" else []) + [
+                "--disallowedTools"] + deny
+    else:                                         # no built-in tool at all: no file, shell or web access of its own
+        cmd += ["--tools", ""] + ([] if no_tools else ["--allowedTools", "mcp__notes"])
+    cmd += ["--model", job["model"], "--effort", job["effort"],
+            "--append-system-prompt-file", os.path.join(AGENT_DIR, "instructions.md")]
     cmd += ["--session-id", job["session"]] if phase == "plan" else ["--resume", job["session"]]
     return cmd
 
@@ -1827,12 +1843,15 @@ def activity(block):
         return "寫 " + short_path(inp.get("file_path", ""))
     if name.startswith("mcp__notes__"):
         tool = name[len("mcp__notes__"):]
-        arg = inp.get("file") or inp.get("query") or inp.get("question") or inp.get("title") or inp.get("source") or ""
+        arg = (inp.get("file") or inp.get("path") or inp.get("query") or inp.get("question") or inp.get("title")
+               or inp.get("source") or "")
         return "%s %s" % (tool, short_path(str(arg)) if arg else "")
     return name
 
 
 def run_agent_phase(job, phase, message):
+    if job["provider"] == "chatgpt":
+        return run_gpt_agent_phase(job, phase, message)
     import subprocess
     cwd = os.path.join(APP, "agent")
     os.makedirs(cwd, exist_ok=True)
@@ -1876,6 +1895,213 @@ def run_agent_phase(job, phase, message):
         job["error"] = str(e)
 
 
+class NotesTools:
+    """The app's tool server (tools/agent_mcp.py), driven by the app itself: for ChatGPT, whose tool calls the app
+    runs, and for gathering what a lean run is handed."""
+
+    def __init__(self, env):
+        import subprocess
+        self.proc = subprocess.Popen([sys.executable, MCP_SCRIPT], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True, encoding="utf-8", env=env,
+                                     start_new_session=True)
+        self.n = 0
+        self.rpc("initialize", {"protocolVersion": "2024-11-05"})
+        self.tools = self.rpc("tools/list", {})["tools"]
+
+    def rpc(self, method, params):
+        self.n += 1
+        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params},
+                                         ensure_ascii=False) + "\n")
+        self.proc.stdin.flush()
+        for line in self.proc.stdout:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("id") == self.n:
+                if "error" in d:
+                    raise RuntimeError(d["error"].get("message"))
+                return d["result"]
+        raise RuntimeError("the tool server stopped")
+
+    def call(self, name, args):
+        r = self.rpc("tools/call", {"name": name, "arguments": args})
+        return "".join(c.get("text", "") for c in r.get("content") or []), bool(r.get("isError"))
+
+    def close(self):
+        try:
+            self.proc.kill()
+        except OSError:
+            pass
+
+
+def lean_context(job):
+    """What a lean run is handed instead of reading: Jev's prep report (or the outline), the note, and the
+    existing pages most related to it, all through the app's tools (so the journal never comes along)."""
+    if job["task"] != "ingest":
+        return ""
+    t = NotesTools(dict(mcp_env(job, "plan"), NOTES_AGENT_FILES="1"))
+    try:
+        rel = job["path"]
+        parts = []
+        rep_, err = t.call("prep", {"file": rel}) if job["jev"] else t.call("outline", {"file": rel, "hits": True})
+        if not err:
+            parts.append("# %s for the note\n\n%s" % ("Jev's prep report" if job["jev"] else "The outline", rep_))
+        # the note (api_agent_start checked it is one of the user's notes, not the journal): whole when short;
+        # else what a careful reader reads after the skim: the opening, the end and the paragraphs the skim marks
+        lines = open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read().split("\n")
+        total = wiki.est_tokens("\n".join(lines))
+        if total <= wiki.READ_WHOLE or job.get("whole"):
+            note, how = "\n".join(lines), "whole"
+        else:
+            keep = set(int(m.group(1)) - 1 for m in re.finditer(r"(?m)^  (\d+)  \S", rep_.split("Jev skim of", 1)[-1])
+                       ) if "Jev skim of" in rep_ else set()
+            marked, keep = sorted(keep), set()
+            budget, i = 2500, 0                   # the opening, ~2.5k tokens of body text
+            while i < len(lines) and budget > 0:
+                keep.add(i); budget -= wiki.est_tokens(lines[i]); i += 1
+            budget, i = 2000, len(lines) - 1      # the end, ~2k tokens (references are left to the map)
+            while i >= 0 and budget > 0:
+                keep.add(i); budget -= wiki.est_tokens(lines[i]); i -= 1
+            used, cap = sum(wiki.est_tokens(lines[k]) for k in keep), wiki.read_part_budget(total)
+            for k in marked:                      # then the skim's paragraphs, in order, up to the budget
+                if k not in keep and k < len(lines):
+                    if used + wiki.est_tokens(lines[k]) > cap:
+                        break
+                    keep.add(k); used += wiki.est_tokens(lines[k])
+            out, last = [], -2
+            for k in sorted(keep):
+                if k != last + 1:
+                    out.append("… (lines left out)")
+                out.append("%6d\t%s" % (k + 1, lines[k]))
+                last = k
+            note = "\n".join(out)
+            how = ("read in parts: the opening, the end and the paragraphs the skim marks as key (line-numbered); "
+                   "say so on the source page with these line ranges")
+        parts.append("# The note `%s` (~%d tokens; %s)\n\n%s" % (rel, total, how, note))
+        body = re.sub(r"^---\n.*?\n---\n", "", open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read(), flags=re.S)
+        q = "Which wiki pages cover what this note is about? %s: %s" % (os.path.basename(rel)[:-3], re.sub(r"\s+", " ", body)[:1500])
+        found, _ = t.call("jev_query", {"question": q, "n": 10}) if job["jev"] else t.call("search", {"query": q[:300], "n": 10})
+        paths = []
+        for m in re.finditer(r"(wiki/[^\n]*?\.md)", found):
+            if m.group(1) not in paths:
+                paths.append(m.group(1))
+        parts.append("# Existing wiki pages most related to the note (found by the app; whole pages, line-numbered)")
+        for pth in paths[:10]:
+            text, err = t.call("read", {"path": pth, "lines": "1-400"})
+            if not err:
+                parts.append("## `%s`\n\n%s" % (pth, text))
+        return "\n\n".join(parts)
+    finally:
+        t.close()
+
+
+MODE_TEXT = {
+    "app": "Tools in this run: only the `notes` tools; there is no Read, Glob, Grep, Edit or Write. Read notes and "
+           "wiki pages with `read`, find pages with `search` and `jev_query`; in the act phase create or replace a "
+           "page with `write`, change part of one with `edit`, add to existing pages with `cite`, take back a page you "
+           "created by mistake with `remove`, and add the log entry with `log_append`.",
+    "lean": "Tools in this run: none while planning. The app has gathered what you work from, below: the prep "
+            "report on the note, the note itself, and the existing wiki pages most related to it (line numbers "
+            "are not part of the text). Plan from these alone; if you'd need a page you weren't given, say so in "
+            "notes. In the act phase you get only `write` (new or whole pages), `edit` (exact text from the pages "
+            "below), `cite`, `remove` (a page you created by mistake), `log_append` (the log entry), `check_source` "
+            "and `lint`: you can't read more, so write from what is here.",
+}
+
+
+def gpt_error(raw):
+    return GPT_LIMIT if "usage_limit" in raw else "ChatGPT 回應錯誤：%s" % raw[:300]
+
+
+def run_gpt_agent_phase(job, phase, message):
+    """One phase on the user's ChatGPT plan: the Responses API (nothing stored at OpenAI); every tool call is
+    one of the app's tools, run here by the app."""
+    import urllib.request
+    import urllib.error
+    job["status"] = "planning" if phase == "plan" else "acting"
+    job["text"] = ""
+    tools = None
+    try:
+        if not (job["mode"] == "lean" and phase == "plan"):
+            tools = NotesTools(mcp_env(job, phase))
+        fns = [{"type": "function", "name": t["name"], "description": t["description"], "parameters": t["inputSchema"],
+                "strict": False} for t in (tools.tools if tools else [])]
+        instructions = open(os.path.join(AGENT_DIR, "instructions.md"), encoding="utf-8").read()
+        job["conv"].append({"role": "user", "content": [{"type": "input_text", "text": message}]})
+        for _ in range(150):
+            if job["stopped"]:
+                return
+            token = connect.gpt_token()
+            if not token:
+                raise RuntimeError("還沒連接 ChatGPT，或登入過期了：到「連接 AI」重新連接。")
+            body = {"model": job["model"], "instructions": instructions, "input": job["conv"], "store": False,
+                    "stream": True, "include": ["reasoning.encrypted_content"], "prompt_cache_key": job["session"],
+                    "reasoning": {"effort": job["effort"] if job["effort"] in ("low", "medium", "high") else "medium"}}
+            if fns:
+                body["tools"] = fns
+            req = urllib.request.Request(connect.RESOURCE + "/responses", data=json.dumps(body).encode(), method="POST",
+                                         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
+                                                  "Accept": "text/event-stream"})
+            try:
+                r = urllib.request.urlopen(req, timeout=600, context=connect._ssl())
+            except urllib.error.HTTPError as e:
+                raise RuntimeError(gpt_error(e.read().decode("utf-8", "replace")))
+            job["proc"] = r
+            calls, done = [], False
+            for line in r:
+                if job["stopped"]:
+                    return
+                line = line.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    ev = json.loads(line[5:])
+                except ValueError:
+                    continue
+                t = ev.get("type", "")
+                if t == "response.output_item.done":
+                    it = ev["item"]
+                    if it.get("type") == "message":
+                        text = "".join(c.get("text", "") for c in it.get("content") or [] if c.get("type") == "output_text")
+                        if text.strip():
+                            job["text"] += ("\n\n" if job["text"] else "") + text
+                        job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": text}]})
+                    elif it.get("type") == "function_call":
+                        calls.append(it)
+                        job["conv"].append({k: it[k] for k in ("type", "call_id", "name", "arguments")})
+                    elif it.get("type") == "reasoning" and it.get("encrypted_content"):
+                        job["conv"].append({k: it[k] for k in ("type", "id", "summary", "encrypted_content") if k in it})
+                elif t == "response.completed":
+                    done = True
+                    u = (ev.get("response") or {}).get("usage") or {}
+                    job["tokens"]["in"] += int(u.get("input_tokens") or 0)
+                    job["tokens"]["cached"] += int((u.get("input_tokens_details") or {}).get("cached_tokens") or 0)
+                    job["tokens"]["out"] += int(u.get("output_tokens") or 0)
+                elif t in ("response.failed", "error"):
+                    raise RuntimeError(gpt_error(json.dumps(ev, ensure_ascii=False)))
+            if not done:
+                raise RuntimeError("ChatGPT 的回應中斷了，請再試一次。")
+            if not calls:
+                return
+            for c in calls:
+                try:
+                    args = json.loads(c.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                item = {"phase": phase, "what": activity({"name": "mcp__notes__" + c["name"], "input": args}), "ok": None}
+                job["steps"].append(item)
+                out, err = tools.call(c["name"], args) if tools else ("no tools in this phase", True)
+                item["ok"] = not err
+                job["conv"].append({"type": "function_call_output", "call_id": c["call_id"], "output": out})
+        raise RuntimeError("ChatGPT 用了太多步還沒做完，停下來了。")
+    except Exception as e:
+        job["error"] = str(e)
+    finally:
+        if tools:
+            tools.close()
+
+
 def parse_plan(text):
     m = list(re.finditer(r"```plan\s*\n(.*?)```", text, re.S))
     if not m:
@@ -1889,7 +2115,15 @@ def parse_plan(text):
 
 def agent_plan(job):
     with AGENT_LOCK:
-        run_agent_phase(job, "plan", agent_facts(job) + "\n" + job["task_text"] + "\n\nPhase: plan.")
+        msg = agent_facts(job) + "\n" + job["task_text"]
+        if job["mode"] in MODE_TEXT:
+            msg += "\n\n" + MODE_TEXT[job["mode"]]
+        if job["mode"] == "lean":
+            try:
+                msg += "\n\n" + lean_context(job)
+            except Exception as e:                # noqa: BLE001 - say so and plan without it
+                msg += "\n\n(The app couldn't gather the material: %s)" % e
+        run_agent_phase(job, "plan", msg + "\n\nPhase: plan.")
     if job["stopped"]:
         job["status"] = "stopped"
     elif job["error"]:
@@ -1933,9 +2167,12 @@ def note_title(rel):
 def api_agent_start(body):
     if READ_ONLY:
         return 403, {"error": RO_ERR}
-    exe = claude_bin()
-    if not exe:
-        return 400, {"error": "找不到 Claude Code（claude 指令）。先安裝並登入 Claude Code。"}
+    provider = "chatgpt" if body.get("provider") == "chatgpt" else "claude"
+    exe = claude_bin() if provider == "claude" else None
+    if provider == "claude" and (not exe or connect.is_off("claude")):
+        return 400, {"error": "還沒連接 Claude：到「連接 AI」按「連接 Claude」。", "connect": True}
+    if provider == "chatgpt" and not connect.gpt_status()["connected"]:
+        return 400, {"error": "還沒連接 ChatGPT。", "connect": True}
     if any(j["status"] in ("planning", "acting") for j in AGENT_JOBS.values()):
         return 409, {"error": "另一個工作還在進行，等它結束或停止它。"}
     task = body.get("task")
@@ -1949,6 +2186,8 @@ def api_agent_start(body):
         title = note_title(rel)
         src = v.source_of.get(rel)
         text = "Task: ingest the note `%s`." % rel
+        if body.get("whole"):
+            text += " The user asked for it to be read whole."
         if src:
             text += " It already has a source page, [[%s]]: update that page and the pages it touched with " \
                     "what is new or was missed, instead of making another source page." % src
@@ -1966,7 +2205,18 @@ def api_agent_start(body):
         label = "檢查知識庫"
     else:
         return 400, {"error": "不認得的工作"}
-    model = body.get("model") if body.get("model") in MODELS else "sonnet"
+    mode = body.get("mode") if body.get("mode") in ("agent", "app", "lean") else "agent"
+    if provider == "chatgpt" and mode == "agent":
+        mode = "app"                              # ChatGPT has no file tools of its own: always the app's
+    if mode == "lean" and task != "ingest":
+        mode = "app"
+    if provider == "chatgpt":
+        try:
+            model = gpt_model()
+        except RuntimeError as e:
+            return 400, {"error": str(e)}
+    else:
+        model = body.get("model") if body.get("model") in MODELS else "sonnet"
     effort = body.get("effort") if body.get("effort") in EFFORTS else ("medium" if task == "analysis" else "high")
     import uuid
     jid = secrets.token_hex(6)
@@ -1975,14 +2225,16 @@ def api_agent_start(body):
         "jev": bool(body.get("jev")) and has_jev(), "session": str(uuid.uuid4()), "status": "planning",
         "steps": [], "text": "", "message": "", "plan": None, "report": "", "changes": [], "outside": [],
         "error": None, "stopped": False, "proc": None, "cost": 0.0, "denied": 0, "started": time.time(),
-        "undone": False, "vault": VAULT, "ui_lang": ui_lang(body.get("ui_lang"))}
+        "undone": False, "vault": VAULT, "ui_lang": ui_lang(body.get("ui_lang")), "provider": provider, "mode": mode,
+        "path": rel if task == "ingest" else None, "conv": [], "tokens": {"in": 0, "cached": 0, "out": 0},
+        "whole": bool(body.get("whole"))}
     threading.Thread(target=agent_plan, args=(job,), daemon=True).start()
     return 200, {"id": jid}
 
 
 def agent_view(job):
     keys = ("id", "task", "label", "model", "effort", "jev", "status", "steps", "message", "plan", "report",
-            "changes", "outside", "error", "cost", "denied", "undone", "seconds")
+            "changes", "outside", "error", "cost", "denied", "undone", "seconds", "provider", "mode", "tokens")
     out = {k: job.get(k) for k in keys}
     if job["status"] in ("planning", "acting"):
         out["live"] = job["text"]
@@ -2022,7 +2274,12 @@ def api_agent_stop(body):
         job["status"] = "cancelled"
     elif job["status"] in ("planning", "acting"):
         job["stopped"] = True
-        if job["proc"]:
+        if job["proc"] and not hasattr(job["proc"], "pid"):   # ChatGPT: the open response; the loop stops itself
+            try:
+                job["proc"].close()
+            except Exception:                     # noqa: BLE001 - already closed
+                pass
+        elif job["proc"]:
             import signal
             try:
                 os.killpg(job["proc"].pid, signal.SIGKILL)  # Claude Code and the tool server it started
@@ -2223,6 +2480,8 @@ CONNECT_POST = {
     "/api/connect/claude/connect": lambda b: connect.claude_connect(),
     "/api/connect/claude/terminal": lambda b: connect.claude_terminal(),
     "/api/connect/claude/cancel": lambda b: connect.claude_cancel(),
+    "/api/connect/claude/disconnect": lambda b: connect.claude_disconnect(),
+    "/api/connect/jev/connect": lambda b: connect.jev_connect(),
     "/api/connect/chatgpt/start": lambda b: connect.gpt_start(),
     "/api/connect/chatgpt/signout": lambda b: connect.gpt_signout(),
     "/api/connect/chatgpt/welcomed": lambda b: connect.gpt_welcomed(),
@@ -2286,6 +2545,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if u.path == "/auth/callback":
             code, html = connect.gpt_callback(parse_qs(u.query))
+            if code == 302:                           # on to a fresh authorization at OpenAI
+                self.send_response(302)
+                self.send_header("Location", html)
+                self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
             return self.send(code, html.encode("utf-8"), "text/html; charset=utf-8")
         if u.path in CONNECT_GET:
             if self.gate(u.path, ()):

@@ -1827,83 +1827,103 @@ async function refreshConnect() {
   if (!CN.open) return;
   const keep = { key: ($("#cn-jev-key") || {}).value || "", focus: document.activeElement && document.activeElement.id };
   $("#cn-body").innerHTML = '<p class="muted cn-lead">用你自己的訂閱或金鑰。app 不經手你的帳號密碼，用量算在你自己的方案裡。至少連接 Claude 或 ChatGPT 其中一個。</p>' +
-    claudeCard(st.claude) + chatgptCard(st.chatgpt, st.chatgpt_model) + jevCard(st.jev);
+    claudeCard(st.claude) + chatgptCard(st.chatgpt) + jevCard(st.jev);
   if ($("#cn-jev-key")) $("#cn-jev-key").value = keep.key;
   if (keep.focus && $("#" + keep.focus)) $("#" + keep.focus).focus();
   if (st.chatgpt.welcome) gptWelcome();
   const cj = st.claude.job || {};
   if (cj.status === "running" || (cj.status === "waiting" && !st.claude.logged_in)) CN.timer = setTimeout(refreshConnect, 2000);
   // the answer box uses whichever AI is connected, without asking
-  if (st.chatgpt.connected && !st.claude.logged_in && aiModel() !== "chatgpt") setPref("aiModel", "chatgpt");
-  if (!st.chatgpt.connected && st.claude.logged_in && aiModel() === "chatgpt") setPref("aiModel", "auto");
+  if (st.chatgpt.connected && !st.claude.connected && aiModel() !== "chatgpt") setPref("aiModel", "chatgpt");
+  if (!st.chatgpt.connected && st.claude.connected && aiModel() === "chatgpt") setPref("aiModel", "auto");
   if (CN.waitGpt && !st.chatgpt.connected) CN.timer = setTimeout(refreshConnect, 2000);
   if (st.chatgpt.connected) CN.waitGpt = false;
 }
 
-function card(name, state, cls, body) {
-  return '<section class="cn-card"><div class="cn-row"><h3>' + name + '</h3><span class="cn-state ' + cls + '">' + state + "</span></div>" + body + "</section>";
+// Every card follows one rule: 未連接 → 「連接」; 連接中… → 「取消」; 已連接 → 「中斷連接」 (and 「管理用量」 where the
+// service has a usage page). Each card: what it is for, what is in use now, the buttons, one line on what the app keeps.
+const CN_STATE = { off: "未連接", wait: "連接中…", on: "已連接" };
+function card(name, st, o) {
+  return '<section class="cn-card"><div class="cn-row"><h3>' + name + '</h3><span class="cn-state ' + st + '">' + CN_STATE[st] + "</span></div>" +
+    "<p>" + o.purpose + "</p>" + (o.detail ? '<div class="cn-detail">' + o.detail + "</div>" : "") +
+    '<div class="cn-acts">' + o.acts + "</div>" + (o.err ? '<p class="cn-err">' + o.err + "</p>" : "") +
+    (o.note ? '<p class="muted small">' + o.note + "</p>" : "") + "</section>";
 }
+const cnBtn = (cn, label, primary) => '<button class="' + (primary ? "primary" : "ghost") + '" data-cn="' + cn + '">' + label + "</button>";
+const cnLink = (href, label) => '<a href="' + href + '" target="_blank" rel="noopener">' + label + "</a>";
 
 function claudeCard(c) {
   const job = c.job || {};
   const installing = job.kind === "install" && job.status === "running";
-  const waiting = job.kind === "login" && job.status === "waiting";
-  let state, cls, body;
-  if (c.logged_in) {
-    const plan = c.subscription ? (c.plan ? cap(c.plan) + " 訂閱" : "訂閱") : c.method === "api_key" ? "API 金鑰（按用量計費）" : (c.method || "");
-    state = "已連接"; cls = "on";
-    body = "<p>使用你的 Claude " + esc(plan) + "。" + (c.expires ? '<span class="muted">登入到 ' + esc(String(c.expires).slice(0, 10)) + " 前有效。</span>" : "") + "</p>" +
-      (job.terminal && (waiting || job.status === "done") ? '<p class="muted small">終端機視窗可以關掉了。</p>' : "") +
-      (c.subscription ? "" : '<p class="muted small">這不是訂閱登入，用量會按 API 計費。</p>');
-  } else if (installing) {
-    state = "安裝中…"; cls = "wait";
-    body = '<p>正在用 Anthropic 官方安裝程式安裝 Claude Code，大約一分鐘。裝好會直接帶你登入。</p>';
-  } else if (waiting) {
-    state = "等你登入…"; cls = "wait";
-    body = (job.terminal ? "<p>已經打開終端機，照視窗裡的說明在瀏覽器登入。完成後這裡會自動變成已連接。</p>"
-                         : "<p>瀏覽器會出現 Claude 的登入頁。登入並按「Authorize」，這裡會自動變成已連接。</p>") +
-      '<p class="muted small">登入完全在 Anthropic 的流程裡完成，app 不會經手你的帳號資料。</p>' +
-      '<div class="cn-acts"><button class="ghost" data-cn="claude-connect">再開一次登入頁</button>' +
-      (job.terminal ? "" : '<button class="ghost" data-cn="claude-terminal">瀏覽器沒出現？改用終端機登入</button>') + "</div>";
+  const waiting = job.kind === "login" && job.status === "waiting" && !c.logged_in;
+  const o = { purpose: "用你的 Claude 訂閱（Pro、Max）回答問題、整理知識庫。" };
+  let st;
+  if (c.connected) {
+    st = "on";
+    const plan = c.subscription ? "Claude " + (c.plan ? cap(c.plan) + " " : "") + "訂閱" : "Claude API 金鑰（按用量計費）";
+    o.detail = "目前使用：你的 " + esc(plan) + "。" + (c.subscription ? "" : '<span class="cn-err">這不是訂閱登入，用量會按 API 計費。</span>');
+    o.acts = cnBtn("claude-disconnect", "中斷連接") + cnLink("https://claude.ai/settings/usage", "管理用量");
+    o.note = "中斷連接只是 app 不再使用 Claude，你的 Claude Code 登入不受影響。";
+  } else if (installing || waiting) {
+    st = "wait";
+    o.detail = installing ? "正在用 Anthropic 官方安裝程式安裝 Claude Code，大約一分鐘，裝好會直接帶你登入。"
+      : job.terminal ? "已經打開終端機，照視窗裡的說明在瀏覽器登入，完成後這裡會自動變成已連接。"
+      : "瀏覽器會出現 Claude 的登入頁，登入並按「Authorize」，這裡會自動變成已連接。";
+    o.acts = cnBtn("claude-cancel", "取消") + (waiting && !job.terminal ? cnBtn("claude-terminal", "瀏覽器沒出現？改用終端機登入") : "");
+    o.note = "登入完全在 Anthropic 的網頁完成，app 不經手你的帳號密碼。";
   } else {
-    state = c.installed ? "還沒登入" : "還沒安裝"; cls = "off";
-    body = "<p>用你的 Claude 訂閱（Pro、Max）回答問題、整理知識庫。</p>" +
-      '<div class="cn-acts"><button class="primary" data-cn="claude-connect">連接 Claude</button></div>' +
-      '<p class="muted small">' + (c.installed ? "" : "會先用 Anthropic 官方安裝程式裝好 Claude Code（不用管理員密碼），") +
-      "接著在瀏覽器打開 Claude 的登入頁讓你登入。app 不會看到你的帳號資料。</p>";
+    st = "off";
+    o.acts = cnBtn("claude-connect", "連接 Claude", true);
+    o.note = c.logged_in ? "你已經登入 Claude Code，按一下就會用它。"
+      : (c.installed ? "" : "會先用 Anthropic 官方安裝程式裝好 Claude Code（不用管理員密碼），") + "接著在瀏覽器登入。app 不經手你的帳號密碼。";
   }
-  if (job.status === "error" && job.error) body += '<p class="cn-err">' + esc(job.error) + (job.tail ? '<br><span class="small">' + esc(job.tail.slice(-200)) + "</span>" : "") + "</p>";
-  return card("Claude", state, cls, body);
+  if (job.status === "error" && job.error) o.err = esc(job.error) + (job.tail ? '<br><span class="small">' + esc(job.tail.slice(-200)) + "</span>" : "");
+  return card("Claude", st, o);
 }
 
-function chatgptCard(g, model) {
-  let body;
-  if (!g.connected) {
-    body = '<p>用你的 ChatGPT 方案（Plus、Pro 等）回答問題。</p><div class="cn-acts"><button class="primary cn-gpt" data-cn="gpt-start">Continue with ChatGPT</button></div>' +
-      '<p class="muted small">在 OpenAI 的網頁同意之後就連上了。用量算在你的 ChatGPT 方案裡，和你在其他 app 的用量共用同一份額度。' +
-      "目前 ChatGPT 只用來回答問題，整理知識庫用 Claude。</p>" +
-      (CN.waitGpt ? '<p class="muted">等你在瀏覽器同意…</p>' : "");
-    return card("ChatGPT", "還沒連接", "off", body);
+function chatgptCard(g) {
+  const o = { purpose: "用你的 ChatGPT 付費方案（Go、Plus、Pro）回答問題。免費版 OpenAI 不開放給其他 app。" };
+  let st;
+  if (g.connected) {
+    st = "on";
+    o.detail = "目前使用：<b>Using ChatGPT plan</b>" + (g.email ? '<span class="muted">（' + esc(g.email) + "）</span>" : "") + "。" +
+      (g.plan_use ? "" : '<span class="cn-err">你沒有同意讓 app 使用方案額度，請中斷後重新連接。</span>');
+    o.acts = cnBtn("gpt-signout", "中斷連接") + cnLink("https://chatgpt.com/settings/usage", "Manage usage");
+    o.note = "中斷連接會撤銷並刪除這個 app 的 ChatGPT 登入。";
+  } else if (CN.waitGpt) {
+    st = "wait";
+    o.detail = "等你在瀏覽器同意…如果 OpenAI 的頁面說「無法取得必要權限」，表示這個帳號的方案不能用在其他 app。";
+    o.acts = cnBtn("gpt-cancel", "取消");
+    o.note = "登入完全在 OpenAI 的網頁完成，app 不經手你的帳號密碼。";
+  } else {
+    st = "off";
+    o.acts = '<button class="primary cn-gpt" data-cn="gpt-start">Continue with ChatGPT</button>';
+    o.note = "在 OpenAI 的網頁同意後就連上了。用量算在你的 ChatGPT 方案，和其他 app 共用同一份額度。";
   }
-  const opts = (CN.models || (model ? [model] : [])).map(m => '<option value="' + esc(m) + '"' + (m === model ? " selected" : "") + ">" + esc(m) + "</option>").join("");
-  body = "<p><b>Using ChatGPT plan</b>" + (g.email ? '<span class="muted">（' + esc(g.email) + "）</span>" : "") + "。" +
-    (g.plan_use ? "" : '<span class="cn-err">你沒有同意讓 app 使用方案額度，請中斷後重新連接。</span>') + "</p>" +
-    '<div class="cn-acts"><label class="small">模型 <select id="cn-gpt-model"><option value="">自動（清單第一個）</option>' + opts + "</select></label>" +
-    (CN.models ? "" : '<button class="ghost" data-cn="gpt-models">載入模型清單</button>') + "</div>" +
-    '<div class="cn-acts"><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener">Manage usage</a>' +
-    '<button class="ghost" data-cn="gpt-signout">中斷連接</button></div>';
-  return card("ChatGPT", "已連接", "on", body);
+  return card("ChatGPT", st, o);
 }
 
 function jevCard(j) {
-  const src = { app: "已設定", env: "用環境變數裡的金鑰", shared: "用 ~/.config/typesafe 裡的金鑰" }[j.source] || "還沒設定";
-  const body = "<p>Jev 幫 app 找相關的頁、判斷問題難度、檢查整理結果。可以不設，app 會改用關鍵字搜尋。用你自己的 TypeSafe 金鑰，費用很低。</p>" +
-    '<div class="cn-acts"><input id="cn-jev-key" type="password" autocomplete="off" placeholder="' + (j.has_key ? "換一把金鑰" : "貼上 TypeSafe API 金鑰") + '">' +
-    '<button class="primary" data-cn="jev-save">' + (j.has_key ? "更換" : "儲存") + "</button>" +
-    (j.source === "app" ? '<button class="ghost" data-cn="jev-remove">移除</button>' : "") + "</div>" +
-    (CN.jevMsg ? '<p class="' + (CN.jevMsg.startsWith("✓") ? "muted" : "cn-err") + ' small">' + esc(CN.jevMsg) + "</p>" : "") +
-    '<p class="muted small">金鑰只存在這台電腦（app 資料夾，只有你的帳號能讀）。儲存前會先試一次，確定能用。</p>';
-  return card("Jev", src, j.has_key ? "on" : "off", body);
+  const o = { purpose: "幫 app 找相關的頁、判斷問題難度、檢查整理結果。可以不連，app 會改用關鍵字搜尋。" };
+  let st;
+  if (j.connected) {
+    st = "on";
+    const where = { app: "存在這個 app", env: "環境變數 TYPESAFE_API_KEY", shared: "~/.config/typesafe" }[j.source];
+    o.detail = "目前使用：你的 TypeSafe 金鑰（" + where + "）。";
+    o.acts = cnBtn("jev-remove", "中斷連接");
+    o.note = j.source === "app" ? "中斷連接會刪掉 app 存的金鑰。" : "中斷連接只是 app 不再使用 Jev，你的金鑰檔案不受影響。";
+  } else if (CN.jevEditing) {
+    st = "wait";
+    o.detail = '<input id="cn-jev-key" type="password" autocomplete="off" placeholder="貼上 TypeSafe API 金鑰">';
+    o.acts = cnBtn("jev-save", "儲存", true) + cnBtn("jev-cancel", "取消");
+    o.note = "儲存前會先試一次，確定能用。金鑰只存在這台電腦（只有你的帳號能讀）。";
+  } else {
+    st = "off";
+    o.acts = cnBtn("jev-connect", "連接 Jev", true);
+    o.note = "用你自己的 TypeSafe 金鑰，費用很低。";
+  }
+  if (CN.jevMsg) o.err = esc(CN.jevMsg);
+  return card("Jev", st, o);
 }
 
 async function gptWelcome() {
@@ -1918,30 +1938,36 @@ async function connectClick(e) {
   if (t.hasAttribute("data-cn-close")) return closeConnect();
   const what = t.dataset.cn;
   const run = async (path, body = {}) => { try { return await api(path, body); } catch (err) { toast(err.message); return null; } };
+  const sure = (name, more) => dialog("中斷 " + name + " 連接？", "<p>" + more + "之後隨時可以再連接。</p>", "中斷連接", true);
   if (what === "claude-connect") await run("/api/connect/claude/connect");
   else if (what === "claude-terminal") await run("/api/connect/claude/terminal");
+  else if (what === "claude-cancel") await run("/api/connect/claude/cancel");
+  else if (what === "claude-disconnect") { if (await sure("Claude", "app 不再使用 Claude；你的 Claude Code 登入不受影響。")) await run("/api/connect/claude/disconnect"); }
   else if (what === "gpt-start") { if (await run("/api/connect/chatgpt/start")) CN.waitGpt = true; }
-  else if (what === "gpt-signout") { if (await dialog("中斷 ChatGPT 連接？", "<p>app 會撤銷並刪除這台電腦上的 ChatGPT 登入。之後可以再連接。</p>", "中斷", true)) await run("/api/connect/chatgpt/signout"); CN.models = null; }
-  else if (what === "gpt-models") { const r = await run("/api/connect/chatgpt/models"); if (r) CN.models = r.models; }
+  else if (what === "gpt-cancel") CN.waitGpt = false;
+  else if (what === "gpt-signout") { if (await sure("ChatGPT", "app 會撤銷並刪除這台電腦上的 ChatGPT 登入。")) await run("/api/connect/chatgpt/signout"); }
+  else if (what === "jev-connect") { const r = await run("/api/connect/jev/connect"); CN.jevMsg = ""; if (r && r.need_key) CN.jevEditing = true; else await refreshTree(); }
+  else if (what === "jev-cancel") { CN.jevEditing = false; CN.jevMsg = ""; }
   else if (what === "jev-save") {
     const k = ($("#cn-jev-key") || {}).value.trim(); if (!k) return;
     t.disabled = true; t.textContent = "測試中…";
-    try { await api("/api/connect/jev/save", { key: k }); CN.jevMsg = "✓ 金鑰可以用，已儲存。"; $("#cn-jev-key").value = ""; await refreshTree(); }
+    try { await api("/api/connect/jev/save", { key: k }); CN.jevMsg = ""; CN.jevEditing = false; await refreshTree(); }
     catch (err) { CN.jevMsg = err.message; }
   }
-  else if (what === "jev-remove") { await run("/api/connect/jev/remove"); CN.jevMsg = ""; await refreshTree(); }
+  else if (what === "jev-remove") {
+    const own = ((await api("/api/connect/status").catch(() => ({}))).jev || {}).source === "app";
+    if (await sure("Jev", own ? "app 會刪掉它存的金鑰。" : "app 不再使用 Jev；你的金鑰檔案不受影響。")) { await run("/api/connect/jev/remove"); await refreshTree(); }
+    CN.jevMsg = "";
+  }
   refreshConnect();
 }
-document.addEventListener("change", async e => {
-  if (e.target.id === "cn-gpt-model") { await api("/api/connect/chatgpt/model", { model: e.target.value }).catch(err => toast(err.message)); }
-});
 
 // first run: nothing connected yet → show the page once
 (async () => {
   if (store.get("connect-seen", false)) return;
   try {
     const st = await api("/api/connect/status");
-    if (!(st.claude.logged_in || st.chatgpt.connected)) showConnect();
+    if (!(st.claude.connected || st.chatgpt.connected)) showConnect();
     store.set("connect-seen", true);
   } catch (e) {}
 })();

@@ -33,14 +33,12 @@ A note counts as ingested when a source page's `source_path` points to it (or to
 
 ### Language
 
-Languages are no boundary: a concept is one page whatever language the notes use, so a Chinese note on 工作記憶
-updates the English page Working Memory (find pages by meaning: `jev_query`, aliases, reading). Decide the
-language of what you write by meaning and context, as a careful human editor would: text added to an existing
-page goes in that page's language; a new page goes in the language the wiki mostly uses, or, in an empty wiki,
-the language the user mostly writes in. Page titles follow the same choice, except a source page, which keeps its
-source's own title, and proper nouns. Keep key terms and short quotes in the original next to the translation.
-Traditional and Simplified Chinese are different scripts: never convert a quote or a title from one to the other.
-If existing concept pages carry their name in another language as an alias, give new concepts one too.
+Languages are no boundary: the wiki has no main language, and a concept is one page whatever languages the notes
+use, so a Chinese note on 工作記憶 updates an English page Working Memory (find pages by meaning: `jev_query`,
+aliases, reading). The language of each page, title and passage is your judgment, by meaning and context, as a
+careful human editor would make it. Put the subject's names in other languages in `aliases`, so every name finds
+the page. Keep key terms and short quotes in their original language and script; never convert Traditional and
+Simplified Chinese into each other.
 Write your messages to the user (the plan message and the report) in the user's language the task message names.
 
 ## Page conventions
@@ -48,7 +46,8 @@ Write your messages to the user (the plan message and the report) in the user's 
 **Titles and links.** File name = page title, human-readable (`wiki/concepts/Sleep Debt.md`). Titles are unique
 across the whole wiki (links resolve by name); avoid `/ \ : * ? " < > | # ^ [ ]`. Source pages take the source's
 title; add a suffix only to keep titles unique or clear: ` (essay)` for the user's own articles, ` (Wikipedia)`,
-` (Author)` / ` (Author Year)`, ` (source)` when it would collide with an entity or concept. Link with wikilinks,
+` (Author)` / ` (Author Year)`, ` (source)` when it would collide with an entity or concept. A chapter's page names
+its book too (`Book — Chapter`): a chapter title alone is seldom unique or clear. Link with wikilinks,
 `[[Page Title]]` or `[[Page Title|text]]`, never markdown links between wiki pages; link to a note with its path,
 `[[raw/some note]]`. Link generously: the first mention of any entity or concept on a page is a link, even if the
 page doesn't exist yet (that marks a page worth creating).
@@ -154,18 +153,22 @@ and updated, contradictions found, what you couldn't do, suggested next steps.
 
 Plan:
 1. Run `prep` on the note (Jev off: `outline` with `hits`). It gives the size and reading mode.
-2. Read at most about 35k tokens in one go. "Read it whole": read the note whole. LONG: read the skim, then in
-   full the introduction, the conclusion and the parts the skim and hits mark. VERY LONG: pick sections from the
-   headings and hits, `skim` those, then read the key parts. Skip references. A book is a folder of chapter
-   notes: the task names the chapter. Notes converted from PDF have `<!-- p.N -->` page markers (cite pages with
-   them); never read the PDF itself. Scanned books have OCR typos: fix obvious ones silently.
+2. Don't read a note whole unless it is short (the map says "short: read it whole") or the user asks you to.
+   Otherwise read the skim first (in prep's report; Jev rates every paragraph for how much it carries the
+   argument and gives each part's most central sentences), then read in full only the opening (abstract,
+   introduction), the conclusion and the passages the skim and hits mark as key: about a third of the note at
+   most (never over ~35k tokens; the app's `read` stops there), so pick by line numbers, don't read on in order.
+   VERY LONG: pick sections from the headings and hits, `skim` those, then read their key parts. Skip references.
+   A book is a folder of chapter notes: the task names the chapter. Notes converted from PDF have `<!-- p.N -->`
+   page markers (cite pages with them); never read the PDF itself. Scanned books have OCR typos: fix obvious ones
+   silently.
 3. Find the existing pages to update: prep's "pages the note mentions" (weight 2 = a main subject), then
    `search` / `jev_query` for main subjects no name matched. Read the pages you will change.
 4. Plan the source page, the 5–15 pages to create or update, and the takeaways.
 
 Act:
 1. Write `wiki/sources/<Title>.md`. Note which parts were read if not all
-   (`> [!note] Read in parts: …`).
+   (`> [!note] Read in parts: …`, with the line ranges).
 2. Jev on: `check_source` with the title; read the passages it names; add what's missing, fix what's wrong.
    Jev off: reread the page against the parts you read; check every name and number.
 3. Integrate: additions to existing pages go through `cite` (one call, many blocks); new pages with Write; fixes,

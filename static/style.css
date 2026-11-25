@@ -443,6 +443,9 @@ h1.renamable:hover { background: var(--panel); }
 .cn-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 4px; }
 .cn-acts input { flex: 1 1 200px; min-width: 0; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
 .cn-acts a { color: var(--accent); }
+.cn-acts a { margin-left: auto; font-size: 13px; }
+.cn-detail { margin: 6px 0; }
+.cn-detail input { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
 .cn-gpt { background: #000; color: #fff; border-color: #000; }
 .cn-err { color: var(--missing); }
 .cn .small, .cn-radio { font-size: 12.5px; }

@@ -1315,7 +1315,7 @@ def cmd_prep(args):
     section("pages the note mentions", cmd_hits, ns(file=rel, max=args.max))
     section("new terms", cmd_terms, ns(file=rel, max=args.max))
     section("not_aliases phrases", cmd_phrases, ns(file=rel))
-    if total > wiki.READ_BUDGET:
+    if total > wiki.READ_WHOLE:
         sk = wiki.est_tokens(read(path)) * wiki.SKIM_RATIO
         if sk <= wiki.READ_BUDGET:
             section("skim (Jev)", cmd_skim, ns(file=rel, lines=None))

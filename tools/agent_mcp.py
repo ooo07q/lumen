@@ -6,9 +6,13 @@ these tools, each a fixed command of the app's own tools/wiki.py and tools/jev.p
 - a file argument must be one of the user's notes (never the journal, never outside the vault);
 - output lines naming a page drawn from the journal, or the journal folder, are dropped;
 - in the plan phase only the tools that read are offered; cite and lint (which write wiki/) come in the act phase;
-- Jev's tools are offered only when Jev is on (NOTES_AGENT_JEV=1).
+- Jev's tools are offered only when Jev is on (NOTES_AGENT_JEV=1);
+- with NOTES_AGENT_FILES=1 (the AI has no file tools of its own) also `read`, and in the act phase `write` and
+  `edit`, which touch only wiki/ (never index.md or a page drawn from the journal);
+- the "lean" phase: the AI was handed everything it reads, so it gets only the tools that write and check.
 
-Environment: NOTES_VAULT, NOTES_DATA (as for the tools), NOTES_AGENT_PHASE (plan | act), NOTES_AGENT_JEV (0 | 1).
+Environment: NOTES_VAULT, NOTES_DATA (as for the tools), NOTES_AGENT_PHASE (plan | act | lean), NOTES_AGENT_JEV
+(0 | 1), NOTES_AGENT_FILES (0 | 1).
 """
 import argparse
 import contextlib
@@ -28,6 +32,63 @@ import jev   # noqa: E402
 PHASE = os.environ.get("NOTES_AGENT_PHASE", "plan")
 JEV_ON = os.environ.get("NOTES_AGENT_JEV") == "1"
 TASK = os.environ.get("NOTES_AGENT_TASK", "")
+FILES = os.environ.get("NOTES_AGENT_FILES") == "1" or PHASE == "lean"
+WHOLE = os.environ.get("NOTES_AGENT_WHOLE") == "1"          # the user asked for notes to be read whole
+RUN = os.environ.get("NOTES_AGENT_RUN", "")
+
+
+def reads_file():
+    return os.path.join(wiki.DATA, "agent_reads.json")
+
+
+def read_lines_allowed(rel, lines, want):
+    """Of the note lines `want` (0-based), those still within the run's budget for reading it in full; the
+    budget is kept per run (both phases) in the data folder."""
+    total = wiki.est_tokens("\n".join(lines))
+    if WHOLE or total <= wiki.READ_WHOLE:
+        return want, None
+    try:
+        d = json.load(open(reads_file(), encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    if d.get("run") != RUN:
+        d = {"run": RUN, "notes": {}}
+    seen = set(d["notes"].get(rel, []))
+    # the end (~2k tokens: the conclusion) has its own share, so reading on in order can't use it up
+    end, acc = len(lines), 0
+    while end > 0 and acc < 2000:
+        end -= 1
+        acc += wiki.est_tokens(lines[end])
+    cost = lambda ids: sum(wiki.est_tokens(lines[i]) for i in ids)                   # noqa: E731
+    budget = wiki.read_part_budget(total)
+    main_cap, used_main, used_end = budget - acc, cost(i for i in seen if i < end), cost(i for i in seen if i >= end)
+    ok, full = [], False
+    for i in want:
+        if i < end and full:
+            continue
+        if i not in seen:
+            t = wiki.est_tokens(lines[i])
+            if i < end and used_main + t > main_cap:
+                full = True                  # the main share is used up: the rest of it is left out; the end may follow
+                continue
+            if i >= end and used_end + t > acc + max(main_cap - used_main, 0):
+                break
+            if i < end:
+                used_main += t
+            else:
+                used_end += t
+            seen.add(i)
+        ok.append(i)
+    used = used_main + used_end
+    d["notes"][rel] = sorted(seen)
+    with open(reads_file(), "w", encoding="utf-8") as f:
+        json.dump(d, f)
+    left = None
+    if len(ok) < len(want):
+        left = ("… stopped: you have read ~%d of this note's ~%d tokens in full, the most for a note the user didn't "
+                "ask to be read whole (its last lines, from %d, keep their own share: read the conclusion there). Work "
+                "from the skim and what you've read; say on the source page which lines were read." % (used, total, end + 1))
+    return ok, left
 MAX_OUT = 60000
 
 
@@ -110,6 +171,120 @@ def t_query(a):
     return run(jev.cmd_query, question=a["question"], n=int(a.get("n") or 20), bm25=5)
 
 
+def t_read(a):
+    """One of the user's notes, or a wiki page (never the journal or a page drawn from it), with line numbers."""
+    arg = str(a.get("path") or "")
+    full = os.path.realpath(arg if os.path.isabs(arg) else os.path.join(wiki.VAULT, arg))
+    vault = os.path.realpath(wiki.VAULT)
+    rel = os.path.relpath(full, vault)
+    if rel.startswith("wiki" + os.sep) and rel.endswith(".md") and os.path.isfile(full):
+        _, rels = private_pages()
+        if rel in rels:
+            raise ValueError("this page is drawn from the journal: off limits")
+    else:
+        rel = note_file(arg)
+        full = os.path.join(vault, rel)
+    lines = open(full, encoding="utf-8", errors="replace").read().split("\n")
+    a0, _, b0 = str(a.get("lines") or "").partition("-")
+    start = max(int(a0), 1) if a0.strip().isdigit() else 1
+    end = min(int(b0), len(lines)) if b0.strip().isdigit() else min(len(lines), start + 1999)
+    stop = None
+    if rel.startswith("wiki" + os.sep):
+        idx = list(range(start - 1, end))
+    else:                                            # a note: the key parts, not the whole (unless asked)
+        idx, stop = read_lines_allowed(rel, lines, list(range(start - 1, end)))
+        if stop:
+            end = idx[-1] + 1 if idx else start - 1
+    out = "\n".join("%6d\t%s" % (i + 1, lines[i]) for i in idx)
+    if stop:
+        return (out + "\n" if out else "") + stop
+    if rel.startswith("wiki" + os.sep):              # index.md and others list journal-drawn pages: drop those lines
+        out = scrub(out)
+    if end < len(lines):
+        out += "\n… (%d lines in all; ask for lines='%d-…' to read on)" % (len(lines), end + 1)
+    return out if len(out) <= MAX_OUT else out[:MAX_OUT] + "\n… (cut)"
+
+
+def wiki_file(arg):
+    """(vault-relative, absolute) path of a page the AI may write: a .md file under wiki/, not index.md, not a
+    page drawn from the journal."""
+    arg = str(arg or "").strip()
+    vault = os.path.realpath(wiki.VAULT)
+    full = os.path.realpath(arg if os.path.isabs(arg) else os.path.join(vault, arg))
+    root = os.path.join(vault, "wiki")
+    if not full.startswith(root + os.sep) or not full.endswith(".md"):
+        raise ValueError("only .md pages under wiki/ can be written: %s" % arg)
+    rel = os.path.relpath(full, vault)
+    bad = set(os.path.basename(full)[:-3]) & set(':*?"<>|#^[]\\')
+    if bad:
+        raise ValueError("a page title can't contain %s (links break): choose another title, e.g. ' — ' for '|'"
+                         % " ".join(sorted(bad)))
+    if rel == os.path.join("wiki", "index.md"):
+        raise ValueError("wiki/index.md is rebuilt by lint: don't write it")
+    if os.path.exists(full):
+        _, rels = private_pages()
+        if rel in rels:
+            raise ValueError("this page is drawn from the journal: off limits")
+    return rel, full
+
+
+def save(full, text):
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(full), suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, full)
+
+
+CREATED = set()                        # pages this run created: the only ones `remove` may take back
+
+
+def t_write(a):
+    rel, full = wiki_file(a.get("path"))
+    text = str(a.get("content") or "")
+    if not text.strip():
+        raise ValueError("empty content")
+    existed = os.path.exists(full)
+    save(full, text if text.endswith("\n") else text + "\n")
+    if not existed:
+        CREATED.add(rel)
+    return "%s %s (%d lines)" % ("replaced" if existed else "created", rel, text.count("\n") + 1)
+
+
+def t_edit(a):
+    rel, full = wiki_file(a.get("path"))
+    if not os.path.isfile(full):
+        raise ValueError("no such page: %s (create it with write)" % rel)
+    old, new = str(a.get("old") or ""), str(a.get("new") or "")
+    text = open(full, encoding="utf-8").read()
+    n = text.count(old) if old else 0
+    if n == 0:
+        raise ValueError("`old` is not in %s: copy it exactly from the page (read it first)" % rel)
+    if n > 1 and not a.get("all"):
+        raise ValueError("`old` occurs %d times in %s: give more context, or all=true" % (n, rel))
+    save(full, text.replace(old, new) if a.get("all") else text.replace(old, new, 1))
+    return "edited %s (%d place%s)" % (rel, n if a.get("all") else 1, "s" if a.get("all") and n > 1 else "")
+
+
+def t_remove(a):
+    rel, full = wiki_file(a.get("path"))
+    if rel not in CREATED:
+        raise ValueError("only a page you created in this run can be removed: %s" % rel)
+    os.remove(full)
+    CREATED.discard(rel)
+    return "removed %s" % rel
+
+
+def t_log_append(a):
+    entry = str(a.get("entry") or "").strip()
+    if not entry.startswith("## ["):
+        raise ValueError("an entry starts with its header line: ## [YYYY-MM-DD] operation | Title")
+    full = os.path.join(wiki.VAULT, "wiki", "log.md")
+    text = open(full, encoding="utf-8").read() if os.path.exists(full) else "# Log\n"
+    save(full, text.rstrip("\n") + "\n\n" + entry + "\n")
+    return "appended to wiki/log.md"
+
+
 def t_log(a):
     return run(wiki.cmd_log, n=int(a.get("n") or 5))
 
@@ -156,23 +331,49 @@ TOOLS = [
     ("jev_query", "plan act", True, t_query,
      "Jev's ranking of the wiki pages most likely to help with a question (plus keyword matches).",
      S({"question": STR, "n": INT}, ["question"])),
+    ("read", "plan act files", False, t_read,
+     "Read one of the user's notes or a wiki page (vault-relative path), with line numbers; lines='A-B' for a part. "
+     "The journal and pages drawn from it are refused.",
+     S({"path": STR, "lines": STR}, ["path"])),
     ("log", "plan act", False, t_log, "The last n entries of wiki/log.md.", S({"n": INT})),
-    ("check_source", "act", True, t_check_source,
+    ("write", "act lean files", False, t_write,
+     "Create a wiki page, or replace one whole (path like 'wiki/concepts/Title.md'; content: the full page with "
+     "frontmatter). Only under wiki/.",
+     S({"path": STR, "content": STR}, ["path", "content"])),
+    ("edit", "act lean files", False, t_edit,
+     "Change part of a wiki page: replace the exact text `old` (copied from the page; it must occur once unless "
+     "all=true) with `new`. For fixes, summary changes and callouts; additions go through cite.",
+     S({"path": STR, "old": STR, "new": STR, "all": BOOL}, ["path", "old", "new"])),
+    ("remove", "act lean files", False, t_remove,
+     "Take back a page you created in this run (e.g. one written under a wrong title). Nothing else can be removed.",
+     S({"path": STR}, ["path"])),
+    ("log_append", "act lean", False, t_log_append,
+     "Append an entry to wiki/log.md: its header line '## [YYYY-MM-DD] ingest | Title', then '- created: …', "
+     "'- updated: …', '- notes: …' lines.",
+     S({"entry": STR}, ["entry"])),
+    ("check_source", "act lean", True, t_check_source,
      "After writing a source page: the raw note's parts whose main point the page leaves out, and the page's "
      "bullets the note doesn't back (names, numbers). A filter: read the passages it names, then fix the page.",
      S({"title": STR}, ["title"])),
-    ("cite", "act", False, t_cite,
+    ("cite", "act lean", False, t_cite,
      "Add text to existing wiki pages, citing a source page. `blocks`: blocks each headed '=== Page Title | Section' "
      "(section optional); each goes at the end of that section (or a new section), and the page gets the source in "
      "sources:, ## Sources and today's updated:. dry_run=true shows the change without writing.",
      S({"blocks": STR, "source": STR, "dry_run": BOOL}, ["blocks", "source"])),
-    ("lint", "act", False, t_lint,
+    ("lint", "act lean", False, t_lint,
      "Rebuild wiki/index.md and check the wiki mechanically (broken frontmatter, links, names). Only in the "
      "'check the wiki' task, full=true (Jev on) also runs Jev's checks over the whole wiki: aliases, missing links "
      "(applied), contradictions, not_aliases phrases; slow the first time on a vault.",
      S({"full": BOOL})),
 ]
-AVAILABLE = {t[0]: t for t in TOOLS if PHASE in t[1].split() and (JEV_ON or not t[2])}
+def offered(phases):
+    p = phases.split()
+    if "files" in p and not FILES:
+        return False
+    return PHASE in p
+
+
+AVAILABLE = {t[0]: t for t in TOOLS if offered(t[1]) and (JEV_ON or not t[2])}
 
 
 def reply(id_, result=None, error=None):

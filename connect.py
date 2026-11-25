@@ -88,6 +88,30 @@ def claude_bin():
 CLAUDE_JOB = {"kind": None, "status": "idle", "out": "", "proc": None, "error": None, "started": 0}
 
 
+# ------------------------------------------------------------------ one rule for all three: 連接 / 中斷連接
+# 中斷連接 means the app stops using it. What the app owns (its ChatGPT sign-in, its Jev key) is deleted too; what it
+# doesn't own (your Claude Code login, a Jev key in your environment or ~/.config/typesafe) is left as it is.
+
+def _off_file():
+    return os.path.join(APP, "connect_off.json")
+
+
+def is_off(name):
+    try:
+        return name in json.load(open(_off_file(), encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+
+
+def set_off(name, off):
+    try:
+        cur = set(json.load(open(_off_file(), encoding="utf-8")))
+    except (OSError, ValueError):
+        cur = set()
+    (cur.add if off else cur.discard)(name)
+    write_private(_off_file(), json.dumps(sorted(cur)))
+
+
 def claude_status():
     exe = claude_bin()
     out = {"installed": bool(exe), "logged_in": False}
@@ -102,6 +126,8 @@ def claude_status():
         except Exception as e:                   # noqa: BLE001 - reported to the page
             out["error"] = str(e)[:200]
     out["subscription"] = out.get("method") == "claude.ai"
+    out["off"] = is_off("claude")
+    out["connected"] = out["logged_in"] and not out["off"]
     j = CLAUDE_JOB
     if j["kind"] == "login" and j["status"] == "waiting":
         p = j.get("proc")
@@ -145,6 +171,9 @@ def claude_connect():
     """The one button: install Claude Code if it isn't there, then sign in."""
     if CLAUDE_JOB["status"] == "running":
         return 409, {"error": "正在安裝 Claude Code，請稍等"}
+    set_off("claude", False)
+    if claude_bin() and claude_status()["logged_in"]:    # already signed in to Claude Code: just use it again
+        return 200, {"ok": True, "step": "done"}
     if not claude_bin():
         threading.Thread(target=_install, daemon=True).start()
         return 200, {"ok": True, "step": "install"}
@@ -195,6 +224,13 @@ def claude_terminal():
         return 500, {"error": "打不開終端機：%s" % r.stderr.strip()[:200]}
     CLAUDE_JOB.update({"kind": "login", "status": "waiting", "error": None, "started": time.time(), "proc": None,
                        "terminal": True})
+    return 200, {"ok": True}
+
+
+def claude_disconnect():
+    """The app stops using Claude. Your Claude Code login stays: you may use Claude Code elsewhere."""
+    claude_cancel()
+    set_off("claude", True)
     return 200, {"ok": True}
 
 
@@ -257,7 +293,9 @@ def host_id():
     return d["host_id"]
 
 
-def gpt_start():
+def auth_url(retry=False):
+    """The authorization URL for a fresh attempt (and its PKCE verifier, state and nonce, kept until the
+    browser comes back)."""
     d = gpt_load()
     hid = host_id()
     verifier = b64u(secrets.token_bytes(48))
@@ -275,10 +313,14 @@ def gpt_start():
     for k in [k for k, v in PENDING.items() if time.time() - v["started"] > 900]:
         PENDING.pop(k, None)
     PENDING[state] = {"verifier": verifier, "nonce": nonce, "client_id": client_id, "redirect": redirect,
-                      "started": time.time()}
-    url = AUTH + "?" + urllib.parse.urlencode(q, quote_via=urllib.parse.quote)
+                      "started": time.time(), "retry": retry}
+    return AUTH + "?" + urllib.parse.urlencode(q, quote_via=urllib.parse.quote)
+
+
+def gpt_start():
+    url = auth_url()
     subprocess.run(["open", url])               # the system browser, where the user is signed in to ChatGPT
-    return 200, {"ok": True, "url": url}
+    return 200, {"ok": True}
 
 
 def verify_id_token(tok, client_id, nonce):
@@ -309,7 +351,8 @@ def verify_id_token(tok, client_id, nonce):
 
 def gpt_callback(q):
     """The browser comes back here from OpenAI. No cookie (it's a cross-site navigation): the one-time `state`
-    is what ties it to the sign-in this app started. Returns (status, html)."""
+    is what ties it to the sign-in this app started. Returns (status, html), or (302, url) to send the browser
+    straight on to a fresh authorization."""
     state = (q.get("state") or [""])[0]
     pend = PENDING.pop(state, None)
     if not pend:
@@ -321,9 +364,17 @@ def gpt_callback(q):
         return 400, page("連接沒有完成", "OpenAI 回傳的 app 編號和之前的不一樣，為了安全沒有接受。")
     if issued == "dynamic_agent_client":
         return 400, page("連接沒有完成", "OpenAI 沒有回傳這個 app 的編號。")
+    d = gpt_load()
+    if d.get("client_id") != issued:              # "retain the issued client_id" (never dynamic_agent_client)
+        d["client_id"] = issued
+        gpt_save(d)
     status, tok = http(TOKEN, {"grant_type": "authorization_code", "client_id": issued, "code": q["code"][0],
                                "code_verifier": pend["verifier"], "redirect_uri": pend["redirect"],
                                "resource": RESOURCE}, form=True)
+    if isinstance(tok, dict) and tok.get("error") == "invalid_grant" and not pend.get("retry"):
+        # OpenAI's docs: "discard that code and start a fresh authorization with the issued client ID retained
+        # for this attempt". The user is already signed in, so the browser goes straight on.
+        return 302, auth_url(retry=True)
     if status != 200 or not isinstance(tok, dict) or "access_token" not in tok:
         return 400, page("連接沒有完成", "換取登入憑證失敗（%s）：%s" % (status, str(tok)[:200]))
     try:
@@ -349,7 +400,12 @@ def page(title, text):
 
 def gpt_token():
     """A valid access token, refreshed when near expiry; None when not connected."""
-    with REFRESH_LOCK:
+    with REFRESH_LOCK, open(gpt_file() + ".lock", "a") as lk:
+        try:                                     # another app process may be refreshing: a refresh token is used once
+            import fcntl
+            fcntl.flock(lk, fcntl.LOCK_EX)
+        except ImportError:                      # Windows: one process at a time is the norm there
+            pass
         d = gpt_load()
         if not d.get("access_token"):
             return None
@@ -389,7 +445,8 @@ def gpt_models():
     status, r = http(RESOURCE + "/models", headers={"Authorization": "Bearer " + t})
     if status != 200 or not isinstance(r, dict):
         return 502, {"error": "OpenAI 回應 %s：%s" % (status, str(r)[:200])}
-    models = [m.get("slug") or m.get("id") for m in r.get("data", []) if m.get("visibility", "list") == "list"]
+    rows = r.get("models") or r.get("data") or []          # the catalogue comes as {"models": [...]}
+    models = [m.get("slug") or m.get("id") for m in rows if m.get("visibility", "list") == "list"]
     return 200, {"models": [m for m in models if m]}
 
 
@@ -445,7 +502,8 @@ def jev_status():
         src = "shared"
     else:
         src = None
-    return {"has_key": bool(src), "source": src}
+    off = is_off("jev")
+    return {"has_key": bool(src), "source": src, "off": off, "connected": bool(src) and not off}
 
 
 def jev_test(key):
@@ -466,14 +524,27 @@ def jev_save(body):
         return 400, {"error": "Jev 不接受這把金鑰（%s）" % (status if status != 200 else str(r)[:100])}
     write_private(jev_file(), key)
     os.environ["TYPESAFE_API_KEY"] = key
+    set_off("jev", False)
     return 200, {"ok": True}
 
 
+def jev_connect():
+    """連接 with a key already on this computer (environment or ~/.config/typesafe): use it again."""
+    st = jev_status()
+    if st["source"] in ("env", "shared"):
+        set_off("jev", False)
+        return 200, {"ok": True}
+    return 200, {"ok": True, "need_key": True}
+
+
 def jev_remove():
+    """中斷連接: the app's own key is deleted; a key of yours elsewhere is left, and the app stops using it."""
     try:
+        k = open(jev_file(), encoding="utf-8").read().strip()
         os.remove(jev_file())
+        if os.environ.get("TYPESAFE_API_KEY") == k:
+            del os.environ["TYPESAFE_API_KEY"]
     except OSError:
         pass
-    if os.environ.get("TYPESAFE_API_KEY"):
-        del os.environ["TYPESAFE_API_KEY"]
+    set_off("jev", True)
     return 200, {"ok": True, "status": jev_status()}
