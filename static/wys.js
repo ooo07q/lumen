@@ -18,7 +18,7 @@ const Wys = (() => {
     const take = (k, n, extra) => { out.push(Object.assign({ k, md: L.slice(i, i + n).join("\n") }, extra || {})); i += n; };
     if (L[0] === "---") {                                  // frontmatter
       const end = L.indexOf("---", 1);
-      if (end > 0) take("raw", end + 1, { label: T("屬性") });
+      if (end > 0) take("fm", end + 1);
     }
     while (i < L.length) {
       const l = L[i];
@@ -96,7 +96,18 @@ const Wys = (() => {
   }
   function el(b, ed) {
     let e;
-    if (b.k === "raw") {
+    if (b.k === "fm") {                                     // properties: a form, not YAML (props.js)
+      e = document.createElement("div");
+      e.className = "wb fm";
+      e.contentEditable = "false";
+      const L = (b.md || "---\n---").split("\n");
+      Props.mount(e, L.slice(1, -1).join("\n"), {
+        before: () => push(ed, true),
+        after: () => { delete e._md; changed(ed); },
+        open: name => ed._open && ed._open(name),
+      });
+      if (b.isNew) e._new = true;
+    } else if (b.k === "raw") {
       e = document.createElement("pre");
       e.className = "wb raw";
       e.dataset.label = b.label || "";
@@ -161,6 +172,11 @@ const Wys = (() => {
     if (e.nodeType === 3) return e.nodeValue.replace(ZW, "");
     if (e.nodeType !== 1) return "";
     const c = e.classList;
+    if (c.contains("fm")) {
+      if (e._md !== undefined && !e._dirty) return e._md;
+      const y = Props.value(e);
+      return y.trim() ? "---\n" + y + "\n---" : e._new ? null : "---\n---";
+    }
     if (c.contains("raw")) return e.innerText.replace(/\n$/, "");
     if (c.contains("hr")) return "---";
     if (c.contains("table")) {
@@ -181,7 +197,7 @@ const Wys = (() => {
     return text;                                            // a paragraph, or something the browser made
   }
   function value(ed) {
-    const v = [...ed.childNodes].filter(n => n.nodeType === 1 || n.nodeValue.trim()).map(blockMd).join("\n");
+    const v = [...ed.childNodes].filter(n => n.nodeType === 1 || n.nodeValue.trim()).map(blockMd).filter(x => x !== null).join("\n");
     return ed._eol && !v.endsWith("\n") ? v + "\n" : v;      // a file that ended with a newline still does
   }
 
@@ -233,7 +249,7 @@ const Wys = (() => {
     }
   }
   function changeType(ed, b, k, extra) {
-    if (!b || b.classList.contains("raw") || b.classList.contains("table") || b.classList.contains("hr")) return b;
+    if (!b || /\b(raw|table|hr|fm)\b/.test(b.className)) return b;
     const e = make(k, ed, extra);
     e.innerHTML = b.innerHTML;
     b.replaceWith(e);
@@ -267,9 +283,10 @@ const Wys = (() => {
     }
     place(b, false);
   }
-  function push(ed, force) {
-    const now = Date.now();
-    if (!force && now - ed._last < 900) return;
+  function push(ed, force, kind) {
+    const now = Date.now();                                 // typing is one step per pause, per kind (typing / deleting)
+    if (!force && now - ed._last < 900 && kind === ed._kind) return;
+    ed._kind = kind;
     ed._last = now;
     ed._undo.push(snap(ed));
     if (ed._undo.length > 200) ed._undo.shift();
@@ -333,7 +350,7 @@ const Wys = (() => {
     }
     const prev = b.previousElementSibling;
     if (!prev) return;
-    if (prev.classList.contains("hr") || prev.classList.contains("table") || prev.classList.contains("raw")) {
+    if (/\b(raw|table|hr|fm)\b/.test(prev.className)) {
       if (!b.textContent.replace(ZW, "") && !b.querySelector(".atom")) { b.remove(); place(prev, false); }
       else if (prev.classList.contains("hr")) prev.remove();
       return changed(ed);
@@ -396,6 +413,13 @@ const Wys = (() => {
       const out = bs.map(b => same ? changeType(ed, b, "p")
         : changeType(ed, b, "li", { ind: b.dataset.ind || "", mk, ck: t === "check" ? (b.classList.contains("done") ? "x" : " ") : "" }));
       if (out[0]) place(out[out.length - 1], false);
+    } else if (t === "props") {                             // show the properties, or start them
+      let fm = ed.querySelector(":scope > .wb.fm");
+      if (!fm) { fm = el({ k: "fm", md: "---\n---", isNew: true }, ed); delete fm._md; ed.prepend(fm); }
+      if (!fm._pp.open) fm.querySelector(".pp-toggle").click();
+      const nb = fm.querySelector(".pp-new"); if (nb && !fm._pp.props.some(p => p.key)) nb.click();
+      fm.scrollIntoView({ block: "nearest" });
+      return;
     } else if (t === "table") {
       const b = bs[bs.length - 1];
       const inTable = b && b.classList.contains("table");
@@ -436,6 +460,7 @@ const Wys = (() => {
 
   function changed(ed) {
     renumber(ed);
+    ed._last = 0;                                           // the next typing is a step of its own
     if (ed._on) ed._on();
   }
 
@@ -487,11 +512,18 @@ const Wys = (() => {
     ed._on = onChange;
     ed.addEventListener("beforeinput", e => {
       if (e.inputType === "historyUndo" || e.inputType === "historyRedo") { e.preventDefault(); undoRedo(ed, e.inputType === "historyUndo"); return; }
-      push(ed, false);
+      // a new line is always the editor's own (enter()); the browser's would copy the block as it is,
+      // and an input method's confirming Enter must not make one at all
+      if (e.inputType === "insertParagraph" || e.inputType === "insertLineBreak") { e.preventDefault(); return; }
+      push(ed, false, /^delete/.test(e.inputType) ? "del" : "ins");
     });
+    // input methods (注音, 倉頡, pinyin…): Enter confirms the word, it must not split the line
+    ed.addEventListener("compositionstart", () => { ed._composing = true; });
+    ed.addEventListener("compositionend", () => { ed._composing = false; ed._compEnd = Date.now(); });
     ed.addEventListener("input", () => { if (ed._on) ed._on(); });
     ed.addEventListener("keydown", e => {
-      if (e.isComposing || e.keyCode === 229) return;       // Chinese/Japanese input: the IME owns Enter
+      if (e.isComposing || e.keyCode === 229 || ed._composing) return;   // Chinese/Japanese input: the IME owns Enter
+      if (e.key === "Enter" && Date.now() - (ed._compEnd || 0) < 60) { e.preventDefault(); return; }   // Safari: the confirming Enter after compositionend
       const k = e.key.toLowerCase(), mod = e.metaKey || e.ctrlKey;
       if (mod && k === "z") { e.preventDefault(); undoRedo(ed, !e.shiftKey); return; }
       if (mod && k === "y") { e.preventDefault(); undoRedo(ed, false); return; }
@@ -557,13 +589,14 @@ const Wys = (() => {
   // ---------- toolbar
   const TOOLS = [["b", "<b>B</b>", "粗體 ⌘B"], ["i", "<i>I</i>", "斜體 ⌘I"], ["u", "<u>U</u>", "底線 ⌘U"], ["s", "<s>S</s>", "刪除線 ⇧⌘X"], null,
     ["ul", "•", "項目清單"], ["dash", "–", "虛線清單"], ["ol", "1.", "編號清單"], ["check", "◯", "核取清單 ⇧⌘L"], null,
-    ["table", "▦", "表格（在表格裡按：多一欄）"], ["attach", "📎", "圖片或附件"], null, ["outdent", "⇤", "減少縮排"], ["indent", "⇥", "增加縮排"]];
+    ["table", "▦", "表格（在表格裡按：多一欄）"], ["attach", "📎", "圖片或附件"], null, ["outdent", "⇤", "減少縮排"], ["indent", "⇥", "增加縮排"], null,
+    ["props", "屬性", "筆記的屬性：標籤、別名、日期、來源…"]];
   function bar(ed, onAttach) {
     const el = document.createElement("div");
     el.className = "wys-bar";
     el.innerHTML = '<select data-t="style" title="' + esc(T("文字樣式")) + '"><option value="">' + esc(T("樣式")) + '</option><option value="h1">' + esc(T("標題")) +
       '</option><option value="h2">' + esc(T("副標題")) + '</option><option value="h3">' + esc(T("小標題")) + '</option><option value="p">' + esc(T("內文")) + "</option></select>" +
-      TOOLS.map(t => !t ? '<span class="sep"></span>' : '<button type="button" data-t="' + t[0] + '" title="' + esc(T(t[2])) + '">' + t[1] + "</button>").join("");
+      TOOLS.map(t => !t ? '<span class="sep"></span>' : '<button type="button" data-t="' + t[0] + '" title="' + esc(T(t[2])) + '">' + T(t[1]) + "</button>").join("");
     el.addEventListener("mousedown", e => { if (e.target.closest("button")) e.preventDefault(); });
     el.addEventListener("click", e => {
       const b = e.target.closest("button");

@@ -497,3 +497,32 @@ h1.renamable:hover { background: var(--panel); }
 .wys .atom.img img { max-width: 100%; max-height: 420px; border-radius: 6px; vertical-align: top; }
 .wys mark { background: #f3e2a1; }
 @media (max-width: 1100px) { .wys-bar { width: calc(100% - 48px); } }
+
+/* properties (props.js): labelled values at the top of a note, in the note's own type */
+.wys .wb.fm { font: 13px/1.5 var(--font); color: var(--text); margin: 0 0 14px; padding: 2px 0 10px; border-bottom: 1px solid var(--line); white-space: normal; }
+.pp-head { display: flex; align-items: baseline; gap: 8px; cursor: pointer; min-height: 24px; }
+.pp-toggle { border: none; padding: 0; color: var(--muted); font-size: 12px; background: none; }
+.pp-toggle:hover { color: var(--accent); }
+.pp-sum { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-row { display: grid; grid-template-columns: 92px 1fr 20px; align-items: start; gap: 8px; padding: 2px 0; }
+.pp-row:hover { background: color-mix(in srgb, var(--panel) 70%, transparent); border-radius: 6px; }
+.pp-k { color: var(--muted); padding-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-v { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+.pp-in, .pp-add, .pp-key { font: inherit; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 2px 5px; max-width: 100%; }
+.pp-in:hover, .pp-add:hover { border-color: var(--line); }
+.pp-in:focus, .pp-add:focus, .pp-key:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+.pp-key { color: var(--muted); }
+.pp-add { width: 6em; color: var(--muted); }
+.pp-chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 4px 1px 8px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 12px; max-width: 100%; }
+.pp-x, .pp-del, .pp-go { border: none; padding: 0 3px; background: none; color: var(--muted); font-size: 13px; line-height: 1; }
+.pp-x:hover, .pp-del:hover { color: var(--missing, #b4533c); }
+.pp-go:hover { color: var(--accent); }
+.pp-del { visibility: hidden; padding-top: 4px; }
+.pp-row:hover .pp-del { visibility: visible; }
+.pp-raw, .pp-yaml { width: 100%; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; resize: vertical; }
+.pp-foot { display: flex; gap: 12px; padding-top: 4px; }
+.pp-foot button { border: none; padding: 0; color: var(--muted); font-size: 12px; background: none; }
+.pp-foot button:hover { color: var(--accent); }
+.meta .tag { color: var(--accent); }
+@media (max-width: 700px) { .pp-row { grid-template-columns: 70px 1fr 20px; } }
+.pp-in.pp-wl { color: var(--accent); }

@@ -653,6 +653,9 @@ function headHtml(n, t) {
     }
     if (n.private) chips.push(T('<span class="chip todo">日記：不送 Jev</span>'));
   }
+  const fmm = n.text.match(/^---\n([\s\S]*?)\n---/);         // tags, from the note's properties
+  const tags = fmm ? (Props.parse(fmm[1]).find(p => /^tags?$/.test(p.key || "") && p.kind === "list") || { items: [] }).items : [];
+  if (tags.length) chips.push(tags.slice(0, 8).map(x => '<span class="tag">#' + esc(String(x).replace(/^#/, "")) + "</span>").join(" "));
   chips.push('<span title="' + esc(n.path) + '">' + esc(n.path.split("/").slice(0, -1).join(" / ")) + "</span>");
   return (renamable ? T('<h1 class="renamable" data-act="rename" title="點一下改名">') : "<h1>") + esc(title) + '</h1><div class="meta">' + chips.join("<span>·</span>") + "</div>" +
     (n.page && n.page.summary ? '<p class="summary">' + esc(n.page.summary) + "</p>" : "");

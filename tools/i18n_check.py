@@ -1,10 +1,10 @@
-"""Check that every interface string has an English entry: the T("…") literals in static/app.js and wys.js and the Chinese
+"""Check that every interface string has an English entry: the T("…") literals in static/app.js, wys.js, props.js and the Chinese
 text in static/index.html must be keys of static/i18n-en.js. Run after changing interface text."""
 import json, os, re, sys
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "static")
 src = open(os.path.join(HERE, "i18n-en.js"), encoding="utf-8").read()
 EN = json.loads(src[src.index("{"):src.rindex("}") + 1])
-app = "".join(open(os.path.join(HERE, f), encoding="utf-8").read() for f in ("app.js", "wys.js"))
+app = "".join(open(os.path.join(HERE, f), encoding="utf-8").read() for f in ("app.js", "wys.js", "props.js"))
 want = set()
 for m in re.finditer(r'T\(("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')\)', app):
     lit = m.group(1)
