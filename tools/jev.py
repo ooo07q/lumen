@@ -1045,20 +1045,42 @@ def note_paragraphs(lines, ranges=None):
     _, _, _, _, _, rngs = wiki.reading_ranges(lines, ranges)
     segs = wiki.segments(lines, rngs)
     paras, heads = [], []
+
+    def close(cur):
+        if not cur:
+            return
+        text = "".join(cur["parts"]) if CJK_END.search(cur["parts"][0][-1:] or "") else " ".join(cur["parts"])
+        sents = [x.strip() for x in wiki.SENTENCE.split(text) if len(set(wiki.content_units(x))) >= 3][:12]
+        if sents:
+            paras.append({"seg": cur["seg"], "line": cur["lines"][0], "lines": cur["lines"], "section": cur["section"],
+                          "text": text, "sents": sents})
     for k, sg in enumerate(segs):
-        section = sg["label"]
+        section, cur = sg["label"], None
         for i in range(sg["start"], sg["end"]):
             ln = lines[i].strip()
             if wiki.HEAD.match(ln):
+                close(cur); cur = None
                 section = re.sub(r"[#*_`]", "", ln).strip()[:100]
                 heads.append((i, section))
                 continue
             if not ln or wiki.SKIP_BLOCK.match(ln):
                 continue
-            sents = [x.strip() for x in wiki.SENTENCE.split(ln) if len(set(wiki.content_units(x))) >= 3][:12]
-            if sents:
-                paras.append({"seg": k, "line": i, "section": section, "text": ln, "sents": sents})
+            # a line that breaks off mid-sentence (scans and PDFs cut text at the end of each printed line) goes on
+            # in the next one: one paragraph, so it is rated and kept as a whole passage. Lists and tables stay apart.
+            block = LIST_ROW.match(ln)
+            if cur and not block and not cur["block"] and not SENT_END.search(cur["parts"][-1]) and \
+                    sum(len(x) for x in cur["parts"]) < 1500:
+                cur["parts"].append(ln); cur["lines"].append(i)
+                continue
+            close(cur)
+            cur = {"seg": k, "section": section, "parts": [ln], "lines": [i], "block": bool(block)}
+        close(cur)
     return paras, heads, segs, rngs
+
+
+SENT_END = re.compile(r"[。！？!?…．.:：;；」』”\"’')）\]】》〉]\s*$|^\W*$")
+LIST_ROW = re.compile(r"^(?:[-*+•]\s|\d+[.)、]\s|\||>|!\[|<)")
+CJK_END = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
 
 
 def rate_paragraphs(path, paras, title):
@@ -1122,9 +1144,9 @@ def key_lines(path, coverage=KEY_COVERAGE, part=None):
     for w, pr in sorted(zip(weight, paras), key=lambda x: -x[0]):
         if got >= coverage * total or w <= 0:
             break
-        keep.add(pr["line"])
+        keep.update(pr.get("lines") or [pr["line"]])
         got += w
-    kept = len(keep)
+    kept = sum(1 for pr in paras if pr["line"] in keep)
     # the substantive paragraphs left out, by their main sentence: a pointer at each gap (an example, a number, a
     # name the summary may want), at a few dozen tokens each instead of the paragraph
     pointers = {pr["line"]: re.sub(r"\s+", " ", sent).strip()[:220]
@@ -1482,6 +1504,45 @@ def source_bullets(page):
     return [clean(b) for b in out]
 
 
+def added_claims(text, source):
+    """The claims one ingest added to other pages, as (page, claim). `text` holds cite blocks ('=== Page | Section'
+    then the text) and whole pages ('=== Page | (page)' then the page; only its lines that cite `source` count).
+    Each bullet, or each run of sentences up to ~300 chars, is one claim; links and the citation dropped."""
+    out, page, whole, skip = [], None, False, False
+    unlink = lambda t: re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", t).replace("[[", "").replace("]]", "")
+    for l in text.split("\n"):
+        m = re.match(r"^=== (.+?)(?:\s*\|\s*(.*))?$", l)
+        if m:
+            page, whole, skip = m.group(1).strip(), (m.group(2) or "").strip() == "(page)", False
+            continue
+        h = re.match(r"^#+\s*(.*)", l)
+        if h:                                   # a Sources / Related list names pages, it claims nothing
+            skip = bool(re.match(r"(?i)(sources?|related|see also|來源|资料来源|資料來源|相關|相关)\b", h.group(1).strip()))
+            continue
+        if not page or skip or not l.strip() or l.lstrip().startswith((">", "---", "|")) or re.match(r"^[\w-]+:", l):
+            continue
+        if whole and "[[" + source not in l:
+            continue
+        t = re.sub(r"\s*\(\[\[%s[^)]*\)" % re.escape(source), "", l)
+        t = unlink(re.sub(r"^\s*([-*]|\d+\.)\s+", "", t)).strip()
+        buf = ""
+        for snt in re.findall(r"[^。！？.!?]*[。！？.!?]+\s*|[^。！？.!?]+$", t):
+            if buf and len(buf) + len(snt) > 300:
+                out.append((page, buf))
+                buf = ""
+            buf += snt
+        if buf:
+            out.append((page, buf))
+    seen, res = set(), []
+    for pg, c in out:                           # a line that is only the source's name says nothing to check
+        if c in seen or len(c.replace(source, "").strip(" -—–:：.。()（）")) < 8:
+            continue
+        seen.add(c)
+        if len(c) > (15 if re.search(r"[\u3400-\u9fff]", c) else 40):
+            res.append((pg, c))
+    return res
+
+
 def cmd_check_source(args):
     """A source page against its raw note: parts whose main point the page leaves out, and Key points or
     details the raw note doesn't back. Tested 2026-11-22 (8 notes, planted errors): 10/16 removed points
@@ -1502,11 +1563,33 @@ def cmd_check_source(args):
     _, body, _ = wiki.parse_frontmatter(p.text)
     summary = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", body).replace("[[", "").replace("]]", "")[:30000]
     parts = []                                  # (file, first line, last line, text)
+    # a page for one part of a long note (frontmatter `part: "i/n"`) is checked against that part only: anything it
+    # says from the rest of the note (or from what the AI knows of the work) is not backed
+    span = getattr(args, "lines", None) if len(files) == 1 else None
+    m = re.match(r"\s*(\d+)\s*/\s*(\d+)", str(p.fm.get("part") or ""))
+    if m and len(files) == 1 and not span:
+        try:
+            nps = note_parts(os.path.join(wiki.VAULT, files[0]))
+            if len(nps) == int(m.group(2)) and 1 <= int(m.group(1)) <= len(nps):
+                span = "%d-%d" % tuple(nps[int(m.group(1)) - 1][1:3])
+        except Exception:                       # noqa: BLE001 - parts unknown: the whole note as evidence
+            span = None
+        if not span:
+            print("!! the page is part %s of the note, but that part's lines are unknown: checked against the whole "
+                  "note, so claims from other parts pass" % p.fm.get("part"))
     for f in files:
         lines = read(f).split("\n")
-        _, _, _, _, _, ranges = wiki.reading_ranges(lines)
+        _, _, _, _, _, ranges = wiki.reading_ranges(lines, span)
         for sg in wiki.segments(lines, ranges, lo=800, hi=2500):
             parts.append((f, sg["start"] + 1, sg["end"], flat("\n".join(lines[sg["start"]:sg["end"]]))[:12000]))
+    other = []                                  # one part of a long note: the rest of the note, for the
+    if span:                                    # "from another part" test below
+        lo_, hi_ = (int(x) for x in span.split("-"))
+        lines = read(files[0]).split("\n")
+        _, _, _, _, _, ranges = wiki.reading_ranges(lines, None)
+        for sg in wiki.segments(lines, ranges, lo=800, hi=2500):
+            if sg["end"] < lo_ or sg["start"] + 1 > hi_:
+                other.append(flat("\n".join(lines[sg["start"]:sg["end"]]))[:12000])
     whole = " ".join(t for *_, t in parts)
     fits = wiki.est_tokens(whole) <= EVIDENCE_TOKENS
     units = lambda t: Counter(wiki.content_units(wiki.zh(t)))
@@ -1526,6 +1609,9 @@ def cmd_check_source(args):
         return " … ".join(parts[k][3] for k in sorted(out))
 
     bl = source_bullets(p)
+    added = added_claims(getattr(args, "added", "") or "", p.name)     # what the same ingest put on other pages
+    bl = bl + [c for _, c in added]
+    where = {c: pg for pg, c in added}
     print("%s: %d parts of %s, %d bullets; evidence per claim: %s" % (
         p.name, len(parts), sp, len(bl), "the whole note" if fits else
         "best-matching parts up to ~%dk tokens (a claim in another language than the note may miss its part)"
@@ -1546,16 +1632,48 @@ def cmd_check_source(args):
         print("  (%d more parts have a substantive point the page leaves out; fine for a summary)" % some)
     bad = [(b, a) for b, a in sups if a and (noul(a, "supported") <= NO or noul(a, "figures") <= NO)]
     unsure = [(b, a) for b, a in sups if a and (b, a) not in bad and noul(a, "supported") < YES]
+    elsewhere = set()
+    if other:
+        # a doubtful claim the rest of the note clearly backs came from another part (or from what the AI knows of
+        # the work): the likely error on a part's page. Only these go back for a fix, not every unsure claim.
+        ou = [units(t) for t in other]
+
+        def other_ev(claim):
+            u = units(claim)
+            sim = lambda k: sum(min(u[w], ou[k][w]) for w in u) / math.sqrt(sum(u.values()) * sum(ou[k].values()) + 1)
+            out, n = [], 0
+            for k in sorted(range(len(other)), key=lambda k: -sim(k)):
+                if n + wiki.est_tokens(other[k]) > EVIDENCE_TOKENS // 2:
+                    break
+                out.append(other[k])
+                n += wiki.est_tokens(other[k])
+            return " … ".join(out)
+        doubt = [b for b, _ in bad + unsure]
+        for b, a in ask_all(doubt, lambda b: ({"claim": b, "source": other_ev(b)}, SUPPORT_Q)):
+            if a and noul(a, "supported") >= YES:
+                elsewhere.add(b)
+        bad = [(b, a) for b, a in bad if b not in elsewhere]
+        unsure = [(b, a) for b, a in unsure if b not in elsewhere]
+        print("\nclaims from another part of the note (the rest of the note backs them, this part doesn't: remove "
+              "them; that part's page will have them):")
+        for b in doubt:
+            if b in elsewhere:
+                on = " (on [[%s]])" % where[b] if b in where else ""
+                print("  %s%s" % (b[:160], on))
+        if not elsewhere:
+            print("  none")
     print("\nbullets the note doesn't back (check against the note and fix):")
     for b, a in bad:
         why = "names/numbers differ" if noul(a, "figures") <= NO else "not in the source"
-        print("  %.2f/%.2f  %s — %s" % (noul(a, "supported"), noul(a, "figures"), why, b[:160]))
+        on = " (on [[%s]])" % where[b] if b in where else ""
+        print("  %.2f/%.2f  %s%s — %s" % (noul(a, "supported"), noul(a, "figures"), why, on, b[:160]))
     if not bad:
         print("  none")
     if unsure:
         print("\nbullets Jev is unsure the note supports (read the passage if the claim matters):")
         for b, a in unsure:
-            print("  %.2f  %s" % (noul(a, "supported"), b[:160]))
+            on = " (on [[%s]])" % where[b] if b in where else ""
+            print("  %.2f%s  %s" % (noul(a, "supported"), on, b[:160]))
     if not os.path.abspath(full).startswith(ESSAYS + os.sep):     # an essay is not a source of other essays
         section("essays that draw on this source (Ingest step 5)", cmd_essays, argparse.Namespace(source=p.name, all=False))
         return
@@ -1811,6 +1929,8 @@ def main():
     sk.add_argument("--lines", help="A-B: only these lines")
     cs = sub.add_parser("check-source")
     cs.add_argument("source", help="title of a source page")
+    cs.add_argument("--lines", help="A-B: check against these lines of the note (one part of a long note)")
+    cs.add_argument("--added", default="", help="text the same ingest added to other pages ('=== Page | Section' blocks)")
     pr = sub.add_parser("prep")
     pr.add_argument("file")
     pr.add_argument("--max", type=int, default=40)

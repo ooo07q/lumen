@@ -6,7 +6,7 @@ Markdown notes. Stdlib only.
 
 Without --vault it opens the vault used last, or shows the start screen (create or open a folder).
 The tools it runs (tools/wiki.py, jev.py, pdf2raw.py) are its own copy, pointed at the open vault with
-$NOTES_VAULT; their caches (Jev's judgments) go to the app data folder ($NOTES_DATA), never to a vault's
+$LUMEN_VAULT; their caches (Jev's judgments) go to the app data folder ($LUMEN_DATA), never to a vault's
 own tools/ folder, which the app ignores. A vault's notes are its raw/ folder if it has one, else everything except wiki/ (the AI's
 pages), templates/ and hidden folders. The app writes notes only on the user's actions (save, journal,
 attachments, new, rename, move, delete); never wiki/. The journal is never sent to Jev.
@@ -48,8 +48,8 @@ ARGS = ap.parse_args()
 # ------------------------------------------------------------------ app data folder (outside any vault)
 
 def app_dir():
-    if os.environ.get("NOTES_APP_DIR"):                # tests: a separate data folder
-        d = os.environ["NOTES_APP_DIR"]
+    if os.environ.get("LUMEN_APP_DIR"):                # tests: a separate data folder
+        d = os.environ["LUMEN_APP_DIR"]
     else:
         if sys.platform == "darwin":
             base = os.path.expanduser("~/Library/Application Support")
@@ -255,10 +255,10 @@ def open_vault(path):
     if _ZH_BUILDING.acquire(timeout=60):      # a table still being built belongs to the old vault: let it finish
         _ZH_BUILDING.release()
     if True:                    # callers hold SWITCH.exclusive() (or it is the start, before serving)
-        os.environ["NOTES_VAULT"] = path
+        os.environ["LUMEN_VAULT"] = path
         # the tools' caches for this vault: in the app data folder, made by the app's own tools only
-        os.environ["NOTES_DATA"] = os.path.join(APP, "vaults", vid)
-        os.makedirs(os.environ["NOTES_DATA"], exist_ok=True)
+        os.environ["LUMEN_DATA"] = os.path.join(APP, "vaults", vid)
+        os.makedirs(os.environ["LUMEN_DATA"], exist_ok=True)
         if wiki is None:
             import wiki as _w
             import jev as _j
@@ -272,8 +272,8 @@ def open_vault(path):
         READ_ONLY = PROTECTED or READ_ONLY
         RO_ERR = ("這是受保護的筆記庫，只能看不能改" if PROTECTED
                   else "唯讀模式（用 --read-only 啟動），不能改")
-        ASSETS = os.path.join(wiki.RAW, "assets")        # the attachments folder (the 附件 section; no notes in it)
-        ATTACH_DIR = wiki.attachment_folder()              # where new attachments go (Obsidian's setting)
+        ASSETS = wiki.ATTACH                               # the attachments folder (the 附件 section; no notes in it)
+        ATTACH_DIR = wiki.ATTACH                           # where new attachments go (Obsidian's setting)
         TRASH = os.path.join(VAULT, ".trash")                       # Obsidian's own trash folder
         if not READ_ONLY and os.path.isdir(os.path.join(VAULT, ".notesapp")) and not os.path.exists(os.path.join(VAULT, ".lumen")):
             os.rename(os.path.join(VAULT, ".notesapp"), os.path.join(VAULT, ".lumen"))   # the app's earlier name
@@ -814,6 +814,47 @@ def api_search(q):
     return 200, {"mode": "bm25", "results": res, "error": error, "seconds": round(time.time() - t0, 1)}
 
 
+def pdf_tool():
+    """The tool PDFs are converted with (uv, which fetches the converter the first time): Lumen's own copy in the
+    app data folder, else one the user has. "" when there is none."""
+    import shutil
+    for p in (os.path.join(APP, "bin", "uv"), shutil.which("uv") or "", os.path.expanduser("~/.local/bin/uv")):
+        if p and os.path.exists(p):
+            os.environ["LUMEN_UV"] = p
+            return p
+    return ""
+
+
+_PDFSETUP = {"status": "idle", "error": ""}
+
+
+def api_pdf_setup(body):
+    """The user said yes to converting PDFs: install the converter's runner (uv, by its official installer, into
+    Lumen's app data folder only; the user's shell settings stay as they are), then convert in the background."""
+    if READ_ONLY:
+        return 403, {"error": RO_ERR}
+    if pdf_tool():
+        background_tidy(force=True)
+        return 200, {"ok": True}
+    if _PDFSETUP["status"] == "installing":
+        return 200, {"ok": True}
+    _PDFSETUP.update(status="installing", error="")
+
+    def run():
+        try:
+            env = dict(os.environ, UV_INSTALL_DIR=os.path.join(APP, "bin"), UV_NO_MODIFY_PATH="1", INSTALLER_NO_MODIFY_PATH="1")
+            r = subprocess.run(["/bin/sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"], env=env,
+                               capture_output=True, text=True, timeout=600)
+            if not pdf_tool():
+                raise RuntimeError((r.stderr or r.stdout or "").strip()[-300:] or "安裝沒有完成")
+            _PDFSETUP["status"] = "idle"
+            background_tidy(force=True)
+        except Exception as e:                     # noqa: BLE001 - shown in the to-do list, with a retry
+            _PDFSETUP.update(status="error", error=str(e)[:300])
+    threading.Thread(target=run, daemon=True).start()
+    return 200, {"ok": True}
+
+
 _BG = {"running": False, "last": 0.0, "out": ""}
 _BG_LOCK = threading.Lock()
 
@@ -822,7 +863,7 @@ def background_tidy(force=False):
     """In the background: new PDFs in the attachment folders become notes, and with Jev on, Jev ranks the notes
     waiting to be organised (only those it hasn't judged yet; never the journal). Runs on opening a vault, after a PDF
     is added, and when the to-do list has notes no one ranked (at most every two minutes)."""
-    if READ_ONLY or not VAULT or os.environ.get("NOTES_NO_BACKGROUND") == "1":     # (tests: off)
+    if READ_ONLY or not VAULT or os.environ.get("LUMEN_NO_BACKGROUND") == "1":     # (tests: off)
         return
     with _BG_LOCK:
         if _BG["running"] or (not force and time.time() - _BG["last"] < 120):
@@ -831,7 +872,7 @@ def background_tidy(force=False):
     tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
     cmd = [sys.executable, os.path.join(tools, "jev.py"), "triage"] if has_jev() else \
           [sys.executable, os.path.join(tools, "wiki.py"), "status", "-n", "0"]
-    env = dict(os.environ)                     # NOTES_VAULT / NOTES_DATA of the vault open now
+    env = dict(os.environ)                     # LUMEN_VAULT / LUMEN_DATA of the vault open now
 
     def run():
         try:
@@ -879,10 +920,9 @@ def api_queue(q):
         pdf_todo, pdf_failed = wiki.waiting_pdfs()
     except Exception:                                  # noqa: BLE001 - the list works without it
         pdf_todo, pdf_failed = [], []
-    import shutil
-    uv = bool(shutil.which("uv") or os.path.exists(os.path.expanduser("~/.local/bin/uv")))
     return 200, {"units": rows, "judged": len(v.triage), "ranking": _BG["running"] and has_jev(),
-                 "pdfs": {"waiting": len(pdf_todo), "failed": [f for f, _ in pdf_failed][:20], "uv": uv,
+                 "pdfs": {"waiting": len(pdf_todo), "failed": [f for f, _ in pdf_failed][:20], "tool": bool(pdf_tool()),
+                          "setup": _PDFSETUP["status"], "error": _PDFSETUP["error"],
                           "converting": _BG["running"] and bool(pdf_todo)}}
 
 
@@ -1328,7 +1368,8 @@ def api_import(body):
     V.images = attachment_map()
     if final.lower().endswith(".pdf"):
         background_tidy(force=True)               # a PDF becomes a note to organise
-    return 200, {"path": os.path.relpath(full, os.path.realpath(VAULT)), "note": is_note}
+    return 200, {"path": os.path.relpath(full, os.path.realpath(VAULT)), "note": is_note,
+                 "pdf_tool": bool(pdf_tool()) if final.lower().endswith(".pdf") else None}
 
 
 HTML_NOTE_RE = r'^html:\s*"?\[\[%s\]\]'
@@ -1394,7 +1435,8 @@ def api_attach(body):
     V.images.setdefault(final.lower(), rel)
     if final.lower().endswith(".pdf"):
         background_tidy(force=True)               # a PDF becomes a note to organise
-    return 200, {"name": final, "path": rel, "image": os.path.splitext(final)[1].lower() in IMG_EXT}
+    return 200, {"name": final, "path": rel, "image": os.path.splitext(final)[1].lower() in IMG_EXT,
+                 "pdf_tool": bool(pdf_tool()) if final.lower().endswith(".pdf") else None}
 
 
 _REFS = {}       # note -> (mtime, every link target in it, lowercased: "name", "folder/name", "x.png")
@@ -1721,7 +1763,7 @@ def run_chatgpt(job, msg):
 def run_ai(job, msg):
     cwd = os.path.join(APP, "agent")              # an empty folder: no CLAUDE.md, no project settings
     os.makedirs(cwd, exist_ok=True)
-    if os.environ.get("NOTES_AI_DEBUG"):
+    if os.environ.get("LUMEN_AI_DEBUG"):
         open(os.path.join(cwd, "last_prompt.txt"), "w", encoding="utf-8").write(msg)
     try:
         if job.get("provider") == "chatgpt":
@@ -1846,7 +1888,7 @@ def outside_snapshot():
 def agent_rules():
     v = os.path.realpath(VAULT)
     a = lambda tool, rel="": "%s(/%s/%s**)" % (tool, v, rel)           # absolute: //path in rule syntax
-    allow = [a("Read"), a("Glob"), a("Grep"), "mcp__notes"]
+    allow = [a("Read"), a("Glob"), a("Grep"), "mcp__lumen"]
     write = [a("Edit", "wiki/"), a("Write", "wiki/")]
     deny = []
     for rel in [wiki.JOURNAL_REL.rstrip("/") + "/", ".lumen/", ".notesapp/", ".trash/"]:
@@ -1892,12 +1934,12 @@ def mcp_env(job, phase):
     the vault by its permission rules, plus these tools), "app" (these tools only: they read and write files
     themselves), "lean" (the app hands the AI what it reads; the act phase gets only the tools that write)."""
     mphase = "lean" if job["mode"] == "lean" and phase == "act" else phase
-    env = {"NOTES_VAULT": VAULT, "NOTES_DATA": wiki.DATA, "NOTES_AGENT_PHASE": mphase,
-           "NOTES_AGENT_JEV": "1" if job["jev"] else "0", "NOTES_AGENT_TASK": job["task"],
-           "NOTES_AGENT_FILES": "1" if job["mode"] == "app" else "0", "NOTES_AGENT_RUN": job["session"],
-           "NOTES_AGENT_WHOLE": "1" if job.get("whole") else "0", "PYTHONIOENCODING": "utf-8",
-           "NOTES_AGENT_NOTE": job.get("path") or "", "NOTES_AGENT_PART": (job.get("part") or {}).get("lines", "")}
-    for k in ("TYPESAFE_API_KEY", "HOME", "PATH", "NOTES_READ_WHOLE"):
+    env = {"LUMEN_VAULT": VAULT, "LUMEN_DATA": wiki.DATA, "LUMEN_AGENT_PHASE": mphase,
+           "LUMEN_AGENT_JEV": "1" if job["jev"] else "0", "LUMEN_AGENT_TASK": job["task"],
+           "LUMEN_AGENT_FILES": "1" if job["mode"] == "app" else "0", "LUMEN_AGENT_RUN": job["session"],
+           "LUMEN_AGENT_WHOLE": "1" if job.get("whole") else "0", "PYTHONIOENCODING": "utf-8",
+           "LUMEN_AGENT_NOTE": job.get("path") or "", "LUMEN_AGENT_PART": (job.get("part") or {}).get("lines", "")}
+    for k in ("TYPESAFE_API_KEY", "HOME", "PATH", "LUMEN_READ_WHOLE"):
         if os.environ.get(k):
             env[k] = os.environ[k]
     return env
@@ -1905,7 +1947,7 @@ def mcp_env(job, phase):
 
 def agent_cmd(job, phase):
     no_tools = job["mode"] == "lean" and phase == "plan"
-    servers = {} if no_tools else {"notes": {"command": sys.executable, "args": [MCP_SCRIPT], "env": mcp_env(job, phase)}}
+    servers = {} if no_tools else {"lumen": {"command": sys.executable, "args": [MCP_SCRIPT], "env": mcp_env(job, phase)}}
     cmd = [job["bin"], "-p", "--output-format", "stream-json", "--verbose",
            "--setting-sources", "", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": servers}),
            "--permission-mode", "dontAsk", "--permission-prompts", "none"]
@@ -1915,7 +1957,7 @@ def agent_cmd(job, phase):
         cmd += ["--add-dir", VAULT, "--tools", tools, "--allowedTools"] + allow + (write if phase == "act" else []) + [
                 "--disallowedTools"] + deny
     else:                                         # no built-in tool at all: no file, shell or web access of its own
-        cmd += ["--tools", ""] + ([] if no_tools else ["--allowedTools", "mcp__notes"])
+        cmd += ["--tools", ""] + ([] if no_tools else ["--allowedTools", "mcp__lumen"])
     cmd += ["--model", job["model"], "--effort", job["effort"],
             "--append-system-prompt-file", os.path.join(AGENT_DIR, "instructions.md")]
     cmd += ["--session-id", job["session"]] if phase == "plan" else ["--resume", job["session"]]
@@ -1940,8 +1982,8 @@ def activity(block):
         return "改 " + short_path(inp.get("file_path", ""))
     if name == "Write":
         return "寫 " + short_path(inp.get("file_path", ""))
-    if name.startswith("mcp__notes__"):
-        tool = name[len("mcp__notes__"):]
+    if name.startswith("mcp__lumen__"):
+        tool = name[len("mcp__lumen__"):]
         arg = (inp.get("file") or inp.get("path") or inp.get("query") or inp.get("question") or inp.get("title")
                or inp.get("source") or "")
         return "%s %s" % (tool, short_path(str(arg)) if arg else "")
@@ -2041,7 +2083,7 @@ def lean_context(job):
     existing pages most related to it, all through the app's tools (so the journal never comes along)."""
     if job["task"] != "ingest":
         return ""
-    t = NotesTools(dict(mcp_env(job, "plan"), NOTES_AGENT_FILES="1"))
+    t = NotesTools(dict(mcp_env(job, "plan"), LUMEN_AGENT_FILES="1"))
     try:
         rel = job["path"]
         parts = []
@@ -2058,7 +2100,7 @@ def lean_context(job):
             "part of the note" if pl0 else "note", os.path.basename(rel)[:-3], re.sub(r"\s+", " ", text0)[:1500])
 
         def find_pages():
-            t2 = NotesTools(dict(mcp_env(job, "plan"), NOTES_AGENT_FILES="1"))
+            t2 = NotesTools(dict(mcp_env(job, "plan"), LUMEN_AGENT_FILES="1"))
             try:
                 found_box["r"] = t2.call("jev_query", {"question": q, "n": 10}) if job["jev"] else \
                     t2.call("search", {"query": q[:300], "n": 10})
@@ -2115,7 +2157,7 @@ def lean_context(job):
         for m in re.finditer(r"(wiki/[^\n]*?\.md)", found):
             if m.group(1) not in paths:
                 paths.append(m.group(1))
-        if os.environ.get("NOTES_LEAN_WHOLE_PAGES") == "1":       # the old way, kept for comparison tests
+        if os.environ.get("LUMEN_LEAN_WHOLE_PAGES") == "1":       # the old way, kept for comparison tests
             parts.append("# Existing wiki pages most related to the note (found by the app; whole pages, line-numbered)")
             for pth in paths[:10]:
                 text, err = t.call("read", {"path": pth, "lines": "1-400"})
@@ -2155,8 +2197,8 @@ def page_card(path, numbered):
 
 
 MODE_TEXT = {
-    "agent": "Tools in this run: Read, Glob, Grep, Edit, Write and the `notes` tools.",
-    "app": "Tools in this run: only the `notes` tools; there is no Read, Glob, Grep, Edit or Write. Read notes and "
+    "agent": "Tools in this run: Read, Glob, Grep, Edit, Write and the `lumen` tools.",
+    "app": "Tools in this run: only the `lumen` tools; there is no Read, Glob, Grep, Edit or Write. Read notes and "
            "wiki pages with `read`, find pages with `search` and `jev_query`; in the act phase create or replace a "
            "page with `write`, change part of one with `edit`, add to existing pages with `cite`, take back a page you "
            "created by mistake with `remove`, and add the log entry with `log_append`.",
@@ -2204,8 +2246,9 @@ CHANGES_SCHEMA = {
 
 PLAN_JSON_TEXT = """Answer as one JSON object (the app reads it): "message", your short message to the user (what you found, a
 few lines, in the user's language); "plan", the plan (summary, takeaways, create, update, notes as described above,
-and "read": paths of pages you need to see whole before writing). In this phase leave the rest empty: "pages" and
-"edits" [], "cite" {"source": "", "blocks": ""}, "log" and "report" ""."""
+and "read": paths of pages you need to see whole before writing; the note's own path only if the user asked for the
+note to be read whole and you have its key passages). In this phase leave the rest empty: "pages" and "edits" [],
+"cite" {"source": "", "blocks": ""}, "log" and "report" ""."""
 
 CHANGES_TEXT = """Now write every change at once, in the same JSON object ("message" "" and "plan" with empty fields now):
 - "pages": new pages, or existing pages replaced whole: {"path": "wiki/<folder>/<Title>.md", "content": the full page
@@ -2219,7 +2262,9 @@ CHANGES_TEXT = """Now write every change at once, in the same JSON object ("mess
 - "report": your short report to the user (in the user's language): pages created and updated, contradictions,
   what you couldn't do.
 The app applies these in order, then checks the source page against the note (Jev) and the wiki (lint), and shows
-you what to fix."""
+you what to fix. If the user's note above asks for the note to be read whole (all of it, not its key passages) and
+you were given only its key passages, write no changes yet: answer with only "plan" "read" set to the note's path;
+the app hands it over whole and asks again."""
 
 
 def gpt_request(job, conv, effort="medium", schema=None):
@@ -2278,7 +2323,7 @@ def gpt_request(job, conv, effort="medium", schema=None):
 def cache_key(job):
     """One prompt-cache key for every run on the same note (and model): the instructions every request begins
     with, and what a note's parts share, are then cached from one run to the next instead of only within a run."""
-    return "notes-" + hashlib.sha1(("%s|%s|%s" % (VAULT, job.get("path") or job["task"], job["model"])).encode("utf-8")).hexdigest()[:20]
+    return "lumen-" + hashlib.sha1(("%s|%s|%s" % (VAULT, job.get("path") or job["task"], job["model"])).encode("utf-8")).hexdigest()[:20]
 
 
 def gpt_lean_phase(job, phase, message):
@@ -2301,7 +2346,7 @@ def gpt_lean_phase(job, phase, message):
         job["steps"][-1]["ok"] = bool(out)
         job["text"] = text
         return
-    t = NotesTools(dict(mcp_env(job, "act"), NOTES_AGENT_FILES="1"))
+    t = NotesTools(dict(mcp_env(job, "act"), LUMEN_AGENT_FILES="1"))
     try:
         # the pages the plan will change or asks to read, that weren't in the material: read them now
         given = set(re.findall(r"## `(wiki/[^`]+\.md)`", json.dumps(job["conv"][0], ensure_ascii=False)))
@@ -2319,6 +2364,9 @@ def gpt_lean_phase(job, phase, message):
                 if not err:
                     more.append("## `%s`\n\n%s" % (rel, txt))
                     job["steps"].append({"phase": "act", "what": "讀 " + rel, "ok": True})
+        if asks_whole(plan, job):               # the user asked (when starting) for the note to be read whole
+            more.insert(0, whole_note(job)); job["whole_given"] = True
+            job["steps"].append({"phase": "act", "what": "讀 " + job["path"] + "（整篇）", "ok": True})
         msg = message + ("\n\n# More pages (the ones the plan names that you hadn't been given)\n\n" + "\n\n".join(more)
                          if more else "") + "\n\n" + CHANGES_TEXT
         job["conv"].append({"role": "user", "content": [{"type": "input_text", "text": msg}]})
@@ -2333,9 +2381,25 @@ def gpt_lean_phase(job, phase, message):
                 job["steps"][-1]["ok"] = False
                 raise RuntimeError("ChatGPT 的回覆不是可用的修改清單。")
             job["steps"][-1]["ok"] = True
+            if attempt == 0 and not job.get("whole_given") and asks_whole(ch.get("plan"), job) and \
+                    not (ch.get("pages") or ch.get("edits") or str((ch.get("cite") or {}).get("blocks") or "").strip()):
+                # the user's note asked for the note whole: hand it over and ask for the changes again
+                job["whole_given"] = True
+                job["steps"].append({"phase": "act", "what": "讀 " + job["path"] + "（整篇）", "ok": True})
+                job["conv"].append({"role": "user", "content": [{"type": "input_text", "text":
+                    "The note, whole, as the user asked:\n\n" + whole_note(job) + "\n\n" + CHANGES_TEXT}]})
+                job["steps"].append({"phase": "act", "what": "ChatGPT 寫出全部修改", "ok": None})
+                out = gpt_request(job, job["conv"], "medium", CHANGES_SCHEMA)
+                job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": out}]})
+                try:
+                    ch = json.loads(out)
+                except ValueError:
+                    job["steps"][-1]["ok"] = False
+                    raise RuntimeError("ChatGPT 的回覆不是可用的修改清單。")
+                job["steps"][-1]["ok"] = True
             if ch.get("report"):
                 report.append(ch["report"])
-            problems, touched, source = [], set(), None
+            problems, touched, source, added = [], set(), None, []
             pages = sorted(ch.get("pages") or [], key=lambda x: not str(x.get("path", "")).startswith("wiki/sources/"))
             for pg in pages:
                 r, err = t.call("write", {"path": pg.get("path"), "content": pg.get("content")})
@@ -2346,6 +2410,8 @@ def gpt_lean_phase(job, phase, message):
                     touched.add(pg["path"])
                     if pg["path"].startswith("wiki/sources/") and not source:
                         source = os.path.basename(pg["path"])[:-3]
+                    elif not pg["path"].startswith("wiki/sources/"):
+                        added.append("=== %s | (page)\n%s" % (os.path.basename(pg["path"])[:-3], pg.get("content") or ""))
             for ed in ch.get("edits") or []:
                 r, err = t.call("edit", {"path": ed.get("path"), "old": ed.get("old"), "new": ed.get("new")})
                 job["steps"].append({"phase": "act", "what": "改 " + str(ed.get("path")), "ok": not err})
@@ -2355,6 +2421,7 @@ def gpt_lean_phase(job, phase, message):
                     touched.add(ed["path"])
             c = ch.get("cite") or {}
             if str(c.get("blocks") or "").strip():
+                added.append(str(c["blocks"]))
                 r, err = t.call("cite", {"blocks": c["blocks"], "source": c.get("source") or source or ""})
                 job["steps"].append({"phase": "act", "what": "cite " + str(c.get("source") or ""), "ok": not err})
                 if err or "not found" in r.lower() or "no such" in r.lower():
@@ -2366,11 +2433,17 @@ def gpt_lean_phase(job, phase, message):
                     problems.append("log: " + r)
             # the app's checks: Jev's check of the source page, and lint
             if source and job["jev"] and attempt == 0:
-                r, err = t.call("check_source", {"title": source})
+                r, err = t.call("check_source", {"title": source, "added": "\n".join(added)})
                 job["steps"].append({"phase": "act", "what": "check_source " + source, "ok": not err})
-                if not err and re.search(r"(?i)main point|not (backed|supported)|mismatch", r):
-                    problems.append("Jev's check of the source page (fix what is really missing or wrong; it is "
-                                    "a filter, not a verdict):\n" + r[-6000:])
+                found = check_findings(r) if not err else ""
+                if found:
+                    problems.append("Jev's check of the source page, and of what you added to other pages (marked "
+                                    "\"on [[Page]]\"), against the note's text (this part's lines, for a long note). "
+                                    "Add what is really missing; correct or remove a claim the text doesn't back: "
+                                    "write what this text says, not what you know of the work from elsewhere. For "
+                                    "each doubtful claim, find the sentence in the text you were given that says it; "
+                                    "if there is none, remove the claim (another part's page will cover it). It is "
+                                    "a filter, not a verdict:\n" + found[-6000:])
             r, err = t.call("lint", {})
             job["steps"].append({"phase": "act", "what": "lint", "ok": not err})
             mine = [l for l in r.split("\n") if any(os.path.basename(x)[:-3] in l for x in touched) and
@@ -2381,8 +2454,13 @@ def gpt_lean_phase(job, phase, message):
                 if problems:
                     report.append("（還有沒修好的：" + "；".join(p.split("\n")[0] for p in problems)[:600] + "）")
                 break
+            # only the pages the problems are about (the source page for Jev's check, pages named "on [[X]]" or in
+            # lint lines, failed writes): the others need no fix and would only cost tokens
+            ptxt = "\n".join(problems)
+            need = {rel for rel in touched if os.path.basename(rel)[:-3] in ptxt or
+                    (rel.startswith("wiki/sources/") and "check of the source page" in ptxt)}
             cur = []
-            for rel in sorted(touched):
+            for rel in sorted(need or touched):
                 txt, err = t.call("read", {"path": rel})
                 if not err:
                     cur.append("## `%s` (as it is now)\n\n%s" % (rel, txt))
@@ -2477,7 +2555,7 @@ def run_gpt_agent_phase(job, phase, message):
                     args = json.loads(c.get("arguments") or "{}")
                 except ValueError:
                     args = {}
-                item = {"phase": phase, "what": activity({"name": "mcp__notes__" + c["name"], "input": args}), "ok": None}
+                item = {"phase": phase, "what": activity({"name": "mcp__lumen__" + c["name"], "input": args}), "ok": None}
                 job["steps"].append(item)
                 out, err = tools.call(c["name"], args) if tools else ("no tools in this phase", True)
                 item["ok"] = not err
@@ -2501,6 +2579,53 @@ def parse_plan(text):
     return (text[:m[-1].start()] + text[m[-1].end():]).strip(), plan
 
 
+def check_findings(report):
+    """The items of Jev's check-source report worth a fix: parts whose main point the page leaves out, claims from
+    another part of the note (one part of a long note: Jev finds them backed by the rest of the note, not by this
+    part; in the 原子習慣 test, later chapters' examples scored 0.65-0.74 against the part alone), bullets the note
+    doesn't back, and bullets Jev doubts (below 0.6). "" when there are none (the headings alone don't count)."""
+    out, sec = [], None
+    for ln in report.split("\n"):
+        if re.match(r"^parts whose main point", ln):
+            sec = "missing"
+        elif re.match(r"^claims from another part", ln):
+            sec = "elsewhere"
+        elif re.match(r"^bullets the note doesn't back", ln):
+            sec = "unbacked"
+        elif re.match(r"^bullets Jev is unsure", ln):
+            sec = "unsure"
+        elif ln.startswith("=") or not ln.strip():
+            sec = None if ln.startswith("=") else sec
+        elif sec and ln.startswith("  ") and not ln.strip().startswith(("none", "(")):
+            m = re.match(r"\s*([\d.]+)", ln)
+            if sec == "unsure" and not (m and float(m.group(1)) < 0.6):
+                continue
+            out.append(("doubtful: " if sec == "unsure" else "") + ln.strip())
+            continue
+        else:
+            continue
+        if sec and ln.strip():
+            out.append(ln.strip())
+    items = [x for x in out if not re.match(r"^(parts whose|bullets |claims from)", x)]
+    return "\n".join(out) if items else ""
+
+
+def whole_note(job):
+    """The note this run organises (its part, for a long note), whole and line-numbered: for when the user asks the
+    AI to read it whole instead of its key passages."""
+    rel = job["path"]
+    lines = open(os.path.join(VAULT, rel), encoding="utf-8", errors="replace").read().split("\n")
+    pl = (job.get("part") or {}).get("lines")
+    a, b = (int(pl.partition("-")[0]) - 1, min(int(pl.partition("-")[2]), len(lines))) if pl else (0, len(lines))
+    return "## `%s`%s, whole\n\n%s" % (rel, " (lines %s)" % pl if pl else "",
+                                        "\n".join("%6d\t%s" % (i + 1, lines[i]) for i in range(a, b)))
+
+
+def asks_whole(plan, job):
+    """The AI judged that the user wants the note read whole: it lists the note's own path in the plan's "read"."""
+    return not job.get("whole") and any(str(x).strip().lstrip("/") == job["path"] for x in (plan or {}).get("read") or [])
+
+
 def agent_plan(job):
     with AGENT_LOCK:
         if job["task"] == "ingest":
@@ -2508,9 +2633,10 @@ def agent_plan(job):
                 ingest_task(job)
             else:
                 choose_part(job)
-        msg = agent_facts(job) + "\n" + job["task_text"]
-        if job["mode"] in MODE_TEXT:
-            msg += "\n\n" + MODE_TEXT[job["mode"]]
+        # what stays the same from run to run first (facts, the mode), then this run's task: a longer shared
+        # prefix for the provider's prompt cache across the parts of a long note
+        msg = agent_facts(job) + ("\n" + MODE_TEXT[job["mode"]] if job["mode"] in MODE_TEXT else "") + \
+            "\n\n" + job["task_text"]
         if job["mode"] == "lean":
             job["steps"].append({"phase": "plan", "what": "準備資料：Jev 的分析、重點段落、相關的頁", "ok": None})
             try:
@@ -2584,7 +2710,8 @@ def ingest_task(job):
             "part at a time (its parts follow its topics): this run covers only these lines (the tools give you "
             "only them). Write a source page for this part, titled `%s — %s`, with `source_path` the note and "
             "`part: \"%d/%d\"` in its frontmatter; it links the other parts' pages where they exist. Update the pages "
-            "this part bears on. The other parts get their own runs."
+            "this part bears on. The other parts get their own runs. Summarise only these lines, not what the rest of the "
+            "work says."
             % (pt["i"] + 1, pt["n"], rel, ("\"%s\"" % pname) if pname else "a portion of the text", a, b, title,
                pname or "Part %d" % (pt["i"] + 1), pt["i"] + 1, pt["n"]))
         job["label"] = "整理「%s」：%s" % (title, pt["name"])
@@ -2967,7 +3094,7 @@ def api_vault_open(body):
 
 
 def api_vault_create(body):
-    """A new vault: a folder <parent>/<name> with journal/, assets/, wiki/ and Obsidian settings (scaffold/).
+    """A new vault: a folder <parent>/<name> with journal/, Attachments/, wiki/ and Obsidian settings (scaffold/).
     In an existing folder only what is missing is added; nothing is ever overwritten."""
     parent = allowed_folder(body.get("parent"))
     name = clean_name(body.get("name"))
@@ -3026,7 +3153,7 @@ POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_s
         "/api/agent/undo": api_agent_undo}
 # these work with no vault open
 GET_APP = {"/api/vaults": api_vaults, "/api/browse": api_browse}
-POST_APP = {"/api/vault/open": api_vault_open, "/api/vault/create": api_vault_create, "/api/vault/forget": api_vault_forget}
+POST_APP = {"/api/vault/open": api_vault_open, "/api/vault/create": api_vault_create, "/api/pdf/setup": api_pdf_setup, "/api/vault/forget": api_vault_forget}
 COOKIE = "lumen_key"
 
 

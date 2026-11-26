@@ -24,8 +24,8 @@ import sys
 import urllib.parse
 from collections import Counter, defaultdict
 
-# The vault: $NOTES_VAULT (the app sets it), else the folder this tools/ folder sits in.
-VAULT = os.path.abspath(os.path.expanduser(os.environ.get("NOTES_VAULT")
+# The vault: $LUMEN_VAULT (the app sets it), else the folder this tools/ folder sits in.
+VAULT = os.path.abspath(os.path.expanduser(os.environ.get("LUMEN_VAULT")
                                            or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 WIKI = os.path.join(VAULT, "wiki")
 # The human's notes: raw/ in a vault laid out that way, else the whole vault except the AI's wiki/ and
@@ -35,9 +35,9 @@ RAW_REL = os.path.relpath(RAW, VAULT) if RAW != VAULT else ""
 NOT_NOTES = {"wiki", "tools", "templates"}       # top-level folders that aren't notes when RAW is the vault
 NOT_NOTE_FILES = {"CLAUDE.md", "AGENTS.md"}       # top-level instructions for an agent, not notes
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))    # these scripts and their fixed data (t2s_chars.json)
-# Caches and per-vault data (triage.json, links.json, …): $NOTES_DATA, else the vault's tools/ if it has
+# Caches and per-vault data (triage.json, links.json, …): $LUMEN_DATA, else the vault's tools/ if it has
 # one, else the vault's hidden .lumen/.
-DATA = os.path.abspath(os.environ.get("NOTES_DATA") or (os.path.join(VAULT, "tools") if os.path.isdir(os.path.join(VAULT, "tools"))
+DATA = os.path.abspath(os.environ.get("LUMEN_DATA") or (os.path.join(VAULT, "tools") if os.path.isdir(os.path.join(VAULT, "tools"))
                                                         else os.path.join(VAULT, ".lumen")))
 
 
@@ -59,7 +59,8 @@ JOURNAL_REL = os.path.relpath(JOURNAL, VAULT)
 def skip_dir(root, d):
     """Folders a walk over the notes skips: hidden ones, attachments, and (when the notes are the whole
     vault) the AI's wiki/ and the tools/templates folders."""
-    return d.startswith(".") or d == "assets" or (RAW == VAULT and os.path.abspath(root) == VAULT and d in NOT_NOTES)
+    return d.startswith(".") or os.path.join(os.path.abspath(root), d) in ATTACH_DIRS or \
+        (RAW == VAULT and os.path.abspath(root) == VAULT and d in NOT_NOTES)
 
 
 def in_notes(rel):
@@ -284,7 +285,8 @@ def processed_paths(pages):
 
 def attachment_folder():
     """Where attachments go: Obsidian's "attachment folder" setting when it names a folder inside the notes, else
-    <notes>/assets/. PDFs are looked for in both (the app puts dropped files in the first)."""
+    <notes>/Attachments/ (<notes>/assets/ in the raw/ layout or where a vault already has one). PDFs are looked
+    for in every attachment folder."""
     try:
         f = json.load(open(os.path.join(VAULT, ".obsidian", "app.json"), encoding="utf-8")).get("attachmentFolderPath")
     except (OSError, ValueError, AttributeError):
@@ -293,11 +295,14 @@ def attachment_folder():
         full = os.path.normpath(os.path.join(VAULT, f.strip("/ ")))
         if full == RAW or full.startswith(RAW + os.sep):
             return full
-    return os.path.join(RAW, "assets")
+    if RAW != VAULT or os.path.isdir(os.path.join(RAW, "assets")):   # the raw/ layout, or a vault already using assets/
+        return os.path.join(RAW, "assets")
+    return os.path.join(RAW, "Attachments")
 
 
-PDF_DIRS = sorted({os.path.join(RAW, "assets"), attachment_folder()})   # PDFs anywhere under these, any subfolder
-PDF_DIRS = [d for d in PDF_DIRS if not any(d.startswith(o + os.sep) for o in PDF_DIRS)]
+ATTACH = attachment_folder()
+ATTACH_DIRS = sorted({ATTACH} | ({os.path.join(RAW, "assets")} if os.path.isdir(os.path.join(RAW, "assets")) else set()))
+PDF_DIRS = [d for d in ATTACH_DIRS if not any(d.startswith(o + os.sep) for o in ATTACH_DIRS)]   # PDFs anywhere under these
 PDF2RAW_SKIPPED = os.path.join(DATA, ".pdf2raw_skipped.json")
 
 
@@ -342,7 +347,7 @@ def convert_pdfs():
     todo, _ = waiting_pdfs()
     if not todo:
         return
-    uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
+    uv = os.environ.get("LUMEN_UV") or shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
     if not os.path.exists(uv):
         print("%d new PDF(s) not converted: uv is not installed "
               "(https://docs.astral.sh/uv/)\n" % len(todo))
@@ -352,14 +357,14 @@ def convert_pdfs():
     r = subprocess.run([uv, "run", "--quiet", "--no-project", "--with", "pymupdf4llm>=2.1,<3"] +
                        (["--with", "pyobjc-framework-Vision", "--with", "numpy", "--with", "pillow"] if sys.platform == "darwin" else []) + ["python",
                         os.path.join(TOOLS_DIR, "pdf2raw.py")], capture_output=True, text=True,
-                       env=dict(os.environ, NOTES_VAULT=VAULT, NOTES_DATA=DATA))
+                       env=dict(os.environ, LUMEN_VAULT=VAULT, LUMEN_DATA=DATA))
     for line in (r.stdout.strip() or r.stderr.strip()[-500:] or "(no output)").splitlines():
         print("  " + line)
     print()
 
 
 READ_BUDGET = 35000   # most tokens read in one go: a long note's skim and key parts
-READ_WHOLE = int(os.environ.get("NOTES_READ_WHOLE") or 0)   # notes up to this are read whole; 0: none, every note is read
+READ_WHOLE = int(os.environ.get("LUMEN_READ_WHOLE") or 0)   # notes up to this are read whole; 0: none, every note is read
 # by its key passages (Jev, ~80% of its key points) unless the user asks for it whole (the user's rule, 2026-11-25)
 
 
@@ -1323,7 +1328,7 @@ def zh_keywords():
 
 # ---------- images: download a raw note's web images ----------
 
-IMG_DIR = os.path.join(RAW, "assets")          # a note's downloaded images go to raw/assets/<note title>/
+IMG_DIR = ATTACH                                # a note's downloaded images go to <attachments>/<note title>/
 _URL = r"(?:https?://|data:image/)(?:[^()\s>]|\([^()\s]*\))+"
 IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*<?(' + _URL + r')>?(?:\s+"[^"]*")?\s*\)'
                     r'|<img\b[^>]*?\bsrc="((?:https?://|data:image/)[^"]+)"[^>]*>')

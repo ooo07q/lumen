@@ -6,13 +6,13 @@ these tools, each a fixed command of the app's own tools/wiki.py and tools/jev.p
 - a file argument must be one of the user's notes (never the journal, never outside the vault);
 - output lines naming a page drawn from the journal, or the journal folder, are dropped;
 - in the plan phase only the tools that read are offered; cite and lint (which write wiki/) come in the act phase;
-- Jev's tools are offered only when Jev is on (NOTES_AGENT_JEV=1);
-- with NOTES_AGENT_FILES=1 (the AI has no file tools of its own) also `read`, and in the act phase `write` and
+- Jev's tools are offered only when Jev is on (LUMEN_AGENT_JEV=1);
+- with LUMEN_AGENT_FILES=1 (the AI has no file tools of its own) also `read`, and in the act phase `write` and
   `edit`, which touch only wiki/ (never index.md or a page drawn from the journal);
 - the "lean" phase: the AI was handed everything it reads, so it gets only the tools that write and check.
 
-Environment: NOTES_VAULT, NOTES_DATA (as for the tools), NOTES_AGENT_PHASE (plan | act | lean), NOTES_AGENT_JEV
-(0 | 1), NOTES_AGENT_FILES (0 | 1).
+Environment: LUMEN_VAULT, LUMEN_DATA (as for the tools), LUMEN_AGENT_PHASE (plan | act | lean), LUMEN_AGENT_JEV
+(0 | 1), LUMEN_AGENT_FILES (0 | 1).
 """
 import argparse
 import contextlib
@@ -29,15 +29,15 @@ sys.stdout = sys.stderr                # anything a tool prints outside a captur
 import wiki  # noqa: E402
 import jev   # noqa: E402
 
-PHASE = os.environ.get("NOTES_AGENT_PHASE", "plan")
-JEV_ON = os.environ.get("NOTES_AGENT_JEV") == "1"
-TASK = os.environ.get("NOTES_AGENT_TASK", "")
-FILES = os.environ.get("NOTES_AGENT_FILES") == "1" or PHASE == "lean"
-RUN = os.environ.get("NOTES_AGENT_RUN", "")
-WHOLE = os.environ.get("NOTES_AGENT_WHOLE") == "1"          # the user asked for the note to be read whole
+PHASE = os.environ.get("LUMEN_AGENT_PHASE", "plan")
+JEV_ON = os.environ.get("LUMEN_AGENT_JEV") == "1"
+TASK = os.environ.get("LUMEN_AGENT_TASK", "")
+FILES = os.environ.get("LUMEN_AGENT_FILES") == "1" or PHASE == "lean"
+RUN = os.environ.get("LUMEN_AGENT_RUN", "")
+WHOLE = os.environ.get("LUMEN_AGENT_WHOLE") == "1"          # the user asked for the note to be read whole
 # a long note organised a part at a time: this run covers lines PART ("A-B") of the note NOTE only
-NOTE = os.environ.get("NOTES_AGENT_NOTE", "")
-PART = os.environ.get("NOTES_AGENT_PART", "")
+NOTE = os.environ.get("LUMEN_AGENT_NOTE", "")
+PART = os.environ.get("LUMEN_AGENT_PART", "")
 
 
 def part_of(rel):
@@ -168,7 +168,8 @@ def t_read(a):
         start = max(start, pa)
         end = min(end if b0.strip().isdigit() else pb, pb)
     keep, note, pointers = None, "", {}
-    if not rel.startswith("wiki" + os.sep) and not WHOLE and wiki.est_tokens("\n".join(lines)) > wiki.READ_WHOLE:
+    whole = WHOLE or a.get("whole") is True or str(a.get("whole")).lower() == "true"
+    if not rel.startswith("wiki" + os.sep) and not whole and wiki.est_tokens("\n".join(lines)) > wiki.READ_WHOLE:
         # a long note: its key passages, the paragraphs Jev rates as carrying ~80% of its key points, and headings
         try:
             keep, st = jev.key_lines(full, part=part)
@@ -292,7 +293,9 @@ def t_log(a):
 
 
 def t_check_source(a):
-    return run(jev.cmd_check_source, source=a["title"])
+    pg = next((p for p in wiki.load_pages() if p.name == a["title"]), None) if PART else None
+    lines = part_of(str(pg.fm.get("source_path") or "")) if pg else None     # this run's part: check against it
+    return run(jev.cmd_check_source, source=a["title"], added=a.get("added") or "", lines=lines)
 
 
 def t_cite(a):
@@ -335,8 +338,9 @@ TOOLS = [
      S({"question": STR, "n": INT}, ["question"])),
     ("read", "plan act files", False, t_read,
      "Read one of the user's notes or a wiki page (vault-relative path), with line numbers; lines='A-B' for a part. "
-     "The journal and pages drawn from it are refused.",
-     S({"path": STR, "lines": STR}, ["path"])),
+     "A long note comes as its key passages; whole=true gives all of it (only when the user asked for the note to "
+     "be read whole). The journal and pages drawn from it are refused.",
+     S({"path": STR, "lines": STR, "whole": {"type": "boolean"}}, ["path"])),
     ("log", "plan act", False, t_log, "The last n entries of wiki/log.md.", S({"n": INT})),
     ("write", "act lean files", False, t_write,
      "Create a wiki page, or replace one whole (path like 'wiki/concepts/Title.md'; content: the full page with "
@@ -355,8 +359,10 @@ TOOLS = [
      S({"entry": STR}, ["entry"])),
     ("check_source", "act lean", True, t_check_source,
      "After writing a source page: the note's parts whose main point the page leaves out, and the page's "
-     "bullets the note doesn't back (names, numbers). A filter: read the passages it names, then fix the page.",
-     S({"title": STR}, ["title"])),
+     "bullets the note doesn't back (names, numbers). `added` (optional): the text this ingest put on other pages "
+     "(cite blocks, or '=== Page | (page)' then a new page), checked against the note the same way. A filter: read "
+     "the passages it names, then fix the pages.",
+     S({"title": STR, "added": STR}, ["title"])),
     ("cite", "act lean", False, t_cite,
      "Add text to existing wiki pages, citing a source page. `blocks`: blocks each headed '=== Page Title | Section' "
      "(section optional); each goes at the end of that section (or a new section), and the page gets the source in "
@@ -399,7 +405,7 @@ def main():
             continue
         if method == "initialize":
             reply(id_, {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                        "capabilities": {"tools": {}}, "serverInfo": {"name": "notes", "version": "1"}})
+                        "capabilities": {"tools": {}}, "serverInfo": {"name": "lumen", "version": "1"}})
         elif method == "tools/list":
             reply(id_, {"tools": [{"name": n, "description": t[4], "inputSchema": t[5]} for n, t in AVAILABLE.items()]})
         elif method == "tools/call":

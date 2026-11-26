@@ -309,7 +309,11 @@ button.danger, .primary.danger { background: var(--missing); border-color: var(-
 .left-actions button { flex: 1; width: auto; }
 .brand { cursor: pointer; border-radius: 8px; padding: 2px 6px; margin-left: -6px; }
 .brand:hover { background: var(--panel); }
-.brand-text #vault-name::after { content: " ▾"; font-size: 10px; color: var(--muted); }
+.brand-text .app-name { font-weight: 700; letter-spacing: .01em; }
+.vault-line { display: flex; gap: 6px; align-items: baseline; font-size: 12px; font-weight: 500; color: var(--muted); min-width: 0; }
+.vault-line #vault-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.vault-line #vault-name::after { content: " ▾"; font-size: 10px; }
+.vault-where:empty { display: none; }
 h1.renamable { cursor: text; border-radius: 6px; }
 h1.renamable:hover { background: var(--panel); }
 .title-input { font: 600 26px var(--serif); width: 100%; border: 1px solid var(--accent); border-radius: 6px; padding: 2px 6px; background: var(--bg); color: var(--text); margin: 0 0 6px; }
@@ -458,3 +462,38 @@ h1.renamable:hover { background: var(--panel); }
 .cn-radio { display: block; margin: 4px 0; font-size: 14px; }
 
 .cn-sub { display: block; font-size: 12px; font-weight: 400; color: var(--muted, #888); margin-top: 2px; }
+
+/* the note editor (wys.js): looks like the note, writes Markdown */
+.wys-bar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 2px; align-items: center; width: calc(100% - 96px); max-width: 820px; margin: 10px auto 0; padding: 4px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.wys-bar button { border-color: transparent; min-width: 30px; height: 28px; padding: 0 6px; }
+.wys-bar button:hover { background: var(--accent-soft); border-color: transparent; }
+.wys-bar select { height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; padding: 0 4px; }
+.wys-bar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+.editor.wys { font: 16px/1.75 var(--serif); min-height: 60vh; padding: 16px 20px 80px; outline: none; border-color: transparent; white-space: pre-wrap; word-break: break-word; }
+.editor.wys:focus { border-color: var(--line); }
+.wys .wb { min-height: 1.75em; margin: 0; }
+.wys .wb.h { font-family: var(--font); font-weight: 700; line-height: 1.35; margin: .9em 0 .3em; }
+.wys .wb.h[data-lv="1"] { font-size: 24px; } .wys .wb.h[data-lv="2"] { font-size: 20px; } .wys .wb.h[data-lv="3"] { font-size: 17px; }
+.wys .wb.h[data-lv="4"], .wys .wb.h[data-lv="5"], .wys .wb.h[data-lv="6"] { font-size: 15px; }
+.wys .wb.li { position: relative; padding-left: calc(1.7em + var(--lv, 0) * 1.6em); }
+.wys .wb.li::before { position: absolute; left: calc(var(--lv, 0) * 1.6em + .35em); content: "•"; color: var(--muted); }
+.wys .wb.li[data-mk="+"]::before { content: "–"; }
+.wys .wb.li[data-mk$="."]::before { content: attr(data-n) "."; font-variant-numeric: tabular-nums; }
+.wys .wb.li[data-mk$=")"]::before { content: attr(data-n) ")"; }
+.wys .wb.li.ck::before { content: ""; top: .38em; width: 1em; height: 1em; box-sizing: border-box; border: 1.5px solid var(--muted); border-radius: 50%; cursor: pointer; }
+.wys .wb.li.ck.done::before { content: "✓"; background: var(--accent); border-color: var(--accent); color: var(--bg); font: 700 11px/1em var(--font); text-align: center; line-height: calc(1em - 3px); }
+.wys .wb.li.ck.done { color: var(--muted); }
+.wys .wb.raw { position: relative; font: 13px/1.6 ui-monospace, "SF Mono", Menlo, monospace; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px 12px 8px; margin: 6px 0; white-space: pre-wrap; }
+.wys .wb.raw::before { content: attr(data-label); position: absolute; top: 2px; left: 10px; font: 11px var(--font); color: var(--muted); }
+.wys .wb.hr { border-top: 1px solid var(--line); min-height: 0; margin: 14px 0; }
+.wys .wb.table table { border-collapse: collapse; margin: 6px 0; font-size: 15px; }
+.wys .wb.table td, .wys .wb.table th { border: 1px solid var(--line); padding: 3px 10px; min-width: 60px; vertical-align: top; }
+.wys .wb.table th { background: var(--panel); }
+.wys .atom { white-space: normal; }
+.wys .atom.wl, .wys .atom.url { color: var(--accent); cursor: text; }
+.wys .atom.wl.missing { opacity: .7; border-bottom: 1px dashed var(--muted); }
+.wys .atom.code code { font: 13px ui-monospace, Menlo, monospace; background: var(--panel); padding: 1px 4px; border-radius: 4px; }
+.wys .atom.tag, .wys .atom.cm { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
+.wys .atom.img img { max-width: 100%; max-height: 420px; border-radius: 6px; vertical-align: top; }
+.wys mark { background: #f3e2a1; }
+@media (max-width: 1100px) { .wys-bar { width: calc(100% - 48px); } }

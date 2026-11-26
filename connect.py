@@ -81,8 +81,8 @@ def http(url, data=None, headers=None, form=False, timeout=30):
 def claude_bin():
     places = (shutil.which("claude"), os.path.expanduser("~/.local/bin/claude"), "/opt/homebrew/bin/claude",
               "/usr/local/bin/claude", os.path.expanduser("~/.claude/local/claude"))
-    if os.environ.get("NOTES_CLAUDE_PATHS") is not None:      # tests: only these places (a computer without Claude)
-        places = [os.path.expanduser(x) for x in os.environ["NOTES_CLAUDE_PATHS"].split(":") if x]
+    if os.environ.get("LUMEN_CLAUDE_PATHS") is not None:      # tests: only these places (a computer without Claude)
+        places = [os.path.expanduser(x) for x in os.environ["LUMEN_CLAUDE_PATHS"].split(":") if x]
     for c in places:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c

@@ -3,10 +3,10 @@
 // md.js (loaded first) renders Markdown and reads window.TREE.
 
 const $ = (s, el = document) => el.querySelector(s);
-const TYPE_ZH = { concept: "概念", entity: "人物・實體", source: "來源", analysis: "分析", overview: "總覽" };
+const TYPE_ZH = { concept: T("概念"), entity: T("人物・實體"), source: T("來源"), analysis: T("分析"), overview: T("總覽") };
 const TYPE_ORDER = ["concept", "entity", "source", "analysis", "overview"];
-const QUEUE_LABEL = { "ingest": "建議整理", "continue a work": "接著整理（同一本書已開始）", "check": "要先看一下值不值得整理",
-  "duplicate?": "可能和別篇重複", "reconvert": "轉檔不完整，要重新轉", "skip (no content)": "沒有內容" };
+const QUEUE_LABEL = { "ingest": T("建議整理"), "continue a work": T("接著整理（同一本書已開始）"), "check": T("要先看一下值不值得整理"),
+  "duplicate?": T("可能和別篇重複"), "reconvert": T("轉檔不完整，要重新轉"), "skip (no content)": T("沒有內容") };
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
@@ -24,7 +24,7 @@ async function api(path, body) {
   const j = await r.json().catch(() => ({ error: "bad response" }));
   if (r.status === 401 && j.nokey) showStart("nokey");
   else if (r.status === 409 && j.novault) showStart();
-  if (!r.ok) { const e = new Error(j.error || r.status); e.data = j; throw e; }
+  if (!r.ok) { const e = new Error(TS(j.error) || r.status); e.data = j; throw e; }
   return j;
 }
 
@@ -40,7 +40,7 @@ function toast(msg, action) {
 }
 
 // a small dialog in place of confirm(): resolves true on OK
-function dialog(title, html, ok = "確定", danger = false) {
+function dialog(title, html, ok = T("確定"), danger = false) {
   return new Promise(res => {
     $("#modal-title").textContent = title; $("#modal-body").innerHTML = html;
     const okb = $("#modal-ok"); okb.textContent = ok; okb.classList.toggle("danger", danger);
@@ -94,21 +94,21 @@ function rowFile(path, label, extra = "", pre = "") {
   const on = t && (t.path === path);
   const own = mine(path) && !S.tree.read_only;
   return '<div class="row' + (on ? " active" : "") + '" data-path="' + esc(path) + '"' + (own ? ' draggable="true"' : "") + '><span class="caret">' + pre + '</span><span class="name">' + esc(label) + "</span>" + extra +
-    (own ? '<button class="row-del" data-del="' + esc(path) + '" title="刪除（移到垃圾桶，可復原）">' + TRASH_SVG + "</button>" : "") + "</div>";
+    (own ? '<button class="row-del" data-del="' + esc(path) + T('" title="刪除（移到垃圾桶，可復原）">') + TRASH_SVG + "</button>" : "") + "</div>";
 }
 // The one to-do marker, used everywhere a raw note is listed: orange = waiting to be organised,
 // grey = Jev found nothing to organise (empty or broken conversion).
 function ingestLabel(path) {
   const f = (S.tree.raw || []).find(x => x.path === path);
   return f && f.parts && f.parts[0] > 0 && f.parts[0] < f.parts[1]
-    ? "✦ 接著整理下一部分（已整理 " + f.parts[0] + "/" + f.parts[1] + "）" : "✦ 請 AI 整理這篇";
+    ? T("✦ 接著整理下一部分（已整理 ") + f.parts[0] + "/" + f.parts[1] + T("）") : T("✦ 請 AI 整理這篇");
 }
 function dot(f) {
   if (f.done) return "";
   if (f.parts && f.parts[0] > 0)                  // a long note organised a part at a time, not finished yet
-    return '<span class="count" title="長篇一次整理一部分：已整理 ' + f.parts[0] + " / " + f.parts[1] + ' 部分"><span class="new"></span>' + f.parts[0] + "/" + f.parts[1] + "</span>";
+    return T('<span class="count" title="長篇一次整理一部分：已整理 ') + f.parts[0] + " / " + f.parts[1] + T(' 部分"><span class="new"></span>') + f.parts[0] + "/" + f.parts[1] + "</span>";
   const skip = SKIP_DECISIONS.has(f.d);
-  return '<span class="new' + (skip ? " skip" : "") + '" title="' + (skip ? "不用整理：" + esc(QUEUE_LABEL[f.d]) : "待整理" + (f.d ? "：Jev 建議「" + esc(QUEUE_LABEL[f.d] || f.d) + "」" : "")) + '"></span>';
+  return '<span class="new' + (skip ? " skip" : "") + '" title="' + (skip ? T("不用整理：") + esc(QUEUE_LABEL[f.d]) : T("待整理") + (f.d ? T("：Jev 建議「") + esc(QUEUE_LABEL[f.d] || f.d) + T("」") : "")) + '"></span>';
 }
 
 function renderRawNode(node, prefix, filter) {
@@ -119,7 +119,7 @@ function renderRawNode(node, prefix, filter) {
     if (filter && !inner && !d.toLowerCase().includes(filter)) continue;
     const open = S.open.has(key) || (filter && inner);
     html += '<div class="folder"><div class="row" data-folder="' + esc(key) + '"><span class="caret">' + (open ? "▾" : "▸") + '</span><span class="name">' + esc(d) +
-      '</span><span class="count" title="' + (child.todo ? child.todo + " 篇待整理，共 " : "共 ") + child.total + ' 篇">' + (child.todo ? '<span class="new"></span>' + child.todo + " / " : "") + child.total + "</span></div>" +
+      '</span><span class="count" title="' + (child.todo ? child.todo + T(" 篇待整理，共 ") : T("共 ")) + child.total + T(' 篇">') + (child.todo ? '<span class="new"></span>' + child.todo + " / " : "") + child.total + "</span></div>" +
       (open ? '<div class="kids">' + (inner || renderRawNode(child, key, "")) + "</div>" : "") + "</div>";
   }
   for (const f of node.files) {
@@ -137,11 +137,11 @@ function renderSub() {
     for (const p of S.tree.pages) counts[p.type] = (counts[p.type] || 0) + 1;
     el.innerHTML = TYPE_ORDER.filter(t => counts[t]).map(t =>
       '<button data-type="' + t + '" class="' + (S.kbType === t ? "on" : "") + '">' + TYPE_ZH[t] + ' <span>' + counts[t] + "</span></button>").join("") +
-      '<button data-type="all" class="' + (S.kbType === "all" ? "on" : "") + '">全部</button>';
+      '<button data-type="all" class="' + (S.kbType === "all" ? "on" : "") + T('">全部</button>');
   } else if (S.sideTab === "raw") {
     const todo = S.tree.raw.filter(f => !f.done && !inJournal(f.path) && !SKIP_DECISIONS.has(f.d)).length;
-    el.innerHTML = '<div class="seg"><button data-mode="tree" class="' + (S.rawMode === "tree" ? "on" : "") + '">資料夾</button>' +
-      '<button data-mode="todo" class="' + (S.rawMode === "todo" ? "on" : "") + '"><span class="new"></span>待整理 <span>' + todo + "</span></button></div>";
+    el.innerHTML = '<div class="seg"><button data-mode="tree" class="' + (S.rawMode === "tree" ? "on" : "") + T('">資料夾</button>') +
+      '<button data-mode="todo" class="' + (S.rawMode === "todo" ? "on" : "") + T('"><span class="new"></span>待整理 <span>') + todo + "</span></button></div>";
   } else { el.hidden = true; return; }
   el.hidden = false;
 }
@@ -149,13 +149,13 @@ function renderSub() {
 function renderTree() {
   const el = $("#tree"), filter = $("#filter").value.trim().toLowerCase();
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === S.sideTab));
-  $("#filter").placeholder = { journal: "篩選日期", raw: "篩選筆記", assets: "篩選附件", wiki: "篩選頁名", results: "篩選" }[S.sideTab];
+  $("#filter").placeholder = { journal: T("篩選日期"), raw: T("篩選筆記"), assets: T("篩選附件"), wiki: T("篩選頁名"), results: T("篩選") }[S.sideTab];
   renderSub();
   if (S.sideTab === "journal") renderJournal(el, filter);
   else if (S.sideTab === "raw" && S.rawMode === "todo") renderQueue(el, filter);
   else if (S.sideTab === "raw") {
     const notes = S.tree.raw.filter(f => !inJournal(f.path));
-    el.innerHTML = '<div class="hint">' + notes.length + " 篇筆記，" + notes.filter(f => f.done).length + ' 篇已整理進知識庫。<span class="new"></span> 待整理。</div>' + renderRawNode(S.rawRoot, ROOT(), filter);
+    el.innerHTML = '<div class="hint">' + notes.length + T(" 篇筆記，") + notes.filter(f => f.done).length + T(' 篇已整理進知識庫。<span class="new"></span> 待整理。</div>') + renderRawNode(S.rawRoot, ROOT(), filter);
   } else if (S.sideTab === "assets") renderAssets(el, filter);
   else if (S.sideTab === "wiki") {
     const types = S.kbType === "all" ? TYPE_ORDER : [S.kbType];
@@ -166,24 +166,24 @@ function renderTree() {
       if (types.length > 1) html += '<div class="group sticky">' + TYPE_ZH[t] + " · " + ps.length + "</div>";
       html += ps.map(p => rowFile(p.path, p.title)).join("");
     }
-    el.innerHTML = html || '<div class="hint">沒有符合的頁面。</div>';
+    el.innerHTML = html || T('<div class="hint">沒有符合的頁面。</div>');
   } else if (S.sideTab === "results") renderResults(el);
 }
 
 // ---------- 日記
 
-const WEEK = ["日", "一", "二", "三", "四", "五", "六"];
+const WEEK = [T("日"), T("一"), T("二"), T("三"), T("四"), T("五"), T("六")];
 function renderJournal(el, filter) {
   const js = S.tree.raw.filter(f => inJournal(f.path)).map(f => ({ ...f, name: baseName(f.path) }))
     .filter(f => !filter || f.name.toLowerCase().includes(filter)).sort((a, b) => b.name.localeCompare(a.name));
-  let html = '<div class="hint">' + js.length + " 篇，在 <code>" + esc(S.tree.journal) + "/</code>。日記只留在本機，不送 Jev。</div>";
-  if (!js.length) html += '<div class="hint">還沒有日記。按上面的「＋ 今天的日記」開始寫。</div>';
+  let html = '<div class="hint">' + js.length + T(" 篇，在 <code>") + esc(S.tree.journal) + T("/</code>。日記只留在本機，不送 Jev。</div>");
+  if (!js.length) html += T('<div class="hint">還沒有日記。按上面的「＋ 今天的日記」開始寫。</div>');
   let month = null;
   for (const f of js) {
     const m = f.name.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    const mk = m ? m[1] + " 年 " + (+m[2]) + " 月" : "其他";
+    const mk = m ? monthLabel(+m[1], +m[2]) : T("其他");
     if (mk !== month) { html += '<div class="group">' + mk + "</div>"; month = mk; }
-    const label = m ? (+m[3]) + " 日　星期" + WEEK[new Date(+m[1], +m[2] - 1, +m[3]).getDay()] : f.name;
+    const label = m ? dayLabel(+m[1], +m[2], +m[3], WEEK[new Date(+m[1], +m[2] - 1, +m[3]).getDay()]) : f.name;
     html += rowFile(f.path, label + (m && f.name.length > 10 ? " " + f.name.slice(10) : ""));
   }
   el.innerHTML = html;
@@ -194,7 +194,7 @@ function renderJournal(el, filter) {
 let queueData = null;
 async function renderQueue(el, filter) {
   if (!queueData) {
-    el.innerHTML = '<div class="hint"><span class="spin"></span> 讀取中…</div>';
+    el.innerHTML = T('<div class="hint"><span class="spin"></span> 讀取中…</div>');
     try { queueData = await api("/api/queue"); } catch (e) { el.innerHTML = '<div class="hint">' + esc(e.message) + "</div>"; return; }
     if (S.sideTab !== "raw" || S.rawMode !== "todo") return;
   }
@@ -207,22 +207,25 @@ async function renderQueue(el, filter) {
     if (!judged.has(unit)) unranked.set(unit, (unranked.get(unit) || 0) + 1);
   }
   const units = [...q.units, ...[...unranked].map(([unit, files]) => ({ unit, files, decision: "unranked" }))];
-  let html = '<div class="hint">左邊有 <span class="new"></span> 的筆記都在這裡，依 Jev 建議的順序排。按一篇筆記的「請 AI 整理這篇」，AI 會寫成來源頁、更新相關的概念頁。</div>' +
-    (q.ranking ? '<div class="hint"><span class="spin"></span> Jev 正在替新筆記排順序…</div>' : "") +
-    (q.pdfs && q.pdfs.waiting ? '<div class="hint">' + (q.pdfs.converting ? '<span class="spin"></span> 正在把 ' + q.pdfs.waiting + " 個 PDF 轉成筆記…"
-      : !q.pdfs.uv ? "有 " + q.pdfs.waiting + " 個 PDF 還沒轉成筆記：轉檔要用 uv，請先安裝（docs.astral.sh/uv），再重新打開 Lumen。"
-      : "有 " + q.pdfs.waiting + " 個 PDF 等著轉成筆記。") + "</div>" : "") +
-    (q.pdfs && q.pdfs.failed.length ? '<div class="hint">轉不出文字的 PDF（可能是掃描檔或加密）：' + q.pdfs.failed.map(f => esc(baseName(f))).join("、") + "</div>" : "");
-  if (q.ranking || (q.pdfs && q.pdfs.converting)) setTimeout(() => { if (S.sideTab === "raw" && S.rawMode === "todo") { queueData = null; renderTree(); } }, 8000);
+  let html = T('<div class="hint">左邊有 <span class="new"></span> 的筆記都在這裡，依 Jev 建議的順序排。按一篇筆記的「請 AI 整理這篇」，AI 會寫成來源頁、更新相關的概念頁。</div>') +
+    (q.ranking ? T('<div class="hint"><span class="spin"></span> Jev 正在替新筆記排順序…</div>') : "") +
+    (q.pdfs && q.pdfs.waiting ? '<div class="hint">' + (q.pdfs.converting ? T('<span class="spin"></span> 正在把 ') + q.pdfs.waiting + T(" 個 PDF 轉成筆記…")
+      : q.pdfs.setup === "installing" ? T('<span class="spin"></span> 正在下載轉檔工具（只有第一次需要）…')
+      : !q.pdfs.tool ? T("有 ") + q.pdfs.waiting + T(" 個 PDF 要先轉成筆記，才能搜尋和整理。第一次轉檔會先下載轉檔工具，大約一兩分鐘，之後就自動轉。") +
+        (q.pdfs.error ? T('<br><span class="cn-err">上次沒裝好：') + esc(q.pdfs.error) + "</span>" : "") +
+        T(' <button class="primary" data-pdf-setup>轉成筆記</button>')
+      : T("有 ") + q.pdfs.waiting + T(" 個 PDF 等著轉成筆記。")) + "</div>" : "") +
+    (q.pdfs && q.pdfs.failed.length ? T('<div class="hint">轉不出文字的 PDF（可能是掃描檔或加密）：') + q.pdfs.failed.map(f => esc(baseName(f))).join(T("、")) + "</div>" : "");
+  if (q.ranking || (q.pdfs && (q.pdfs.converting || q.pdfs.setup === "installing"))) setTimeout(() => { if (S.sideTab === "raw" && S.rawMode === "todo") { queueData = null; renderTree(); } }, 8000);
   let last = null;
   for (const u of units.filter(u => !filter || u.unit.toLowerCase().includes(filter))) {
-    if (u.decision !== last) { html += '<div class="group">' + esc(u.decision === "unranked" ? (q.ranking ? "還沒排順序（Jev 排序中）" : S.tree.jev ? "還沒排順序" : "還沒排順序（連接 Jev 後會自動排）") : QUEUE_LABEL[u.decision] || u.decision) + "</div>"; last = u.decision; }
+    if (u.decision !== last) { html += '<div class="group">' + esc(u.decision === "unranked" ? (q.ranking ? T("還沒排順序（Jev 排序中）") : S.tree.jev ? T("還沒排順序") : T("還沒排順序（連接 Jev 後會自動排）")) : QUEUE_LABEL[u.decision] || u.decision) + "</div>"; last = u.decision; }
     const name = notesRel(u.unit).replace(/\.md$/, "");
     const pr = u.priority != null ? "P" + u.priority : "";
-    if (/\.md$/.test(u.unit)) { html += rowFile(u.unit, name, '<span class="count">' + (u.parts ? "已整理 " + u.parts[0] + "/" + u.parts[1] + (pr ? " · " : "") : "") + pr + "</span>", u.decision === "unranked" ? "" : ""); continue; }
+    if (/\.md$/.test(u.unit)) { html += rowFile(u.unit, name, '<span class="count">' + (u.parts ? T("已整理 ") + u.parts[0] + "/" + u.parts[1] + (pr ? " · " : "") : "") + pr + "</span>", u.decision === "unranked" ? "" : ""); continue; }
     const open = S.queueOpen.has(u.unit);
     html += '<div class="folder"><div class="row" data-queue-folder="' + esc(u.unit) + '"><span class="caret">' + (open ? "▾" : "▸") + '</span><span class="name">' + esc(name) +
-      '</span><span class="count">' + u.files + " 篇" + (pr ? " · " + pr : "") + "</span></div>";
+      '</span><span class="count">' + u.files + T(" 篇") + (pr ? " · " + pr : "") + "</span></div>";
     if (open) html += '<div class="kids">' + S.tree.raw.filter(f => f.path.startsWith(u.unit + "/")).map(f => rowFile(f.path, f.path.slice(u.unit.length + 1).replace(/\.md$/, ""), dot(f))).join("") + "</div>";
     html += "</div>";
   }
@@ -232,9 +235,9 @@ async function renderQueue(el, filter) {
 // ---------- 附件
 
 let assetsData = null;
-const FILE_KIND = [[/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i, "圖片", "🖼"], [/\.pdf$/i, "PDF", "📄"], [/\.(mp3|m4a|wav|ogg)$/i, "音訊", "🎵"],
-  [/\.(mp4|mov|webm)$/i, "影片", "🎬"], [/\.html?$/i, "網頁", "🌐"], [/\.(txt|csv|tsv|json|js|css|py|xml|ya?ml|tex|bib|log)$/i, "文字", "📃"]];
-const fileKind = p => (FILE_KIND.find(([rx]) => rx.test(p)) || [null, "檔案", "📎"]).slice(1);
+const FILE_KIND = [[/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i, T("圖片"), "🖼"], [/\.pdf$/i, "PDF", "📄"], [/\.(mp3|m4a|wav|ogg)$/i, T("音訊"), "🎵"],
+  [/\.(mp4|mov|webm)$/i, T("影片"), "🎬"], [/\.html?$/i, T("網頁"), "🌐"], [/\.(txt|csv|tsv|json|js|css|py|xml|ya?ml|tex|bib|log)$/i, T("文字"), "📃"]];
+const fileKind = p => (FILE_KIND.find(([rx]) => rx.test(p)) || [null, T("檔案"), "📎"]).slice(1);
 const fmtSize = n => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB";
 
 async function loadAssets(force) {
@@ -244,24 +247,24 @@ async function loadAssets(force) {
 
 async function renderAssets(el, filter) {
   if (!assetsData) {
-    el.innerHTML = '<div class="hint"><span class="spin"></span> 讀取中…</div>';
+    el.innerHTML = T('<div class="hint"><span class="spin"></span> 讀取中…</div>');
     try { await loadAssets(); } catch (e) { el.innerHTML = '<div class="hint">' + esc(e.message) + "</div>"; return; }
     if (S.sideTab !== "assets") return;
   }
   const fs = assetsData.files.filter(f => !filter || f.path.toLowerCase().includes(filter));
-  let html = '<div class="hint">' + assetsData.files.length + " 個檔案，在 <code>" + esc(assetsData.dir) + "/</code>。把檔案拖進筆記或在編輯時貼上，會自動存到這裡並連結到那篇筆記。</div>";
-  if (!assetsData.files.length) html += '<div class="hint">還沒有附件。' + (S.tree.vault ? "" : "") + "</div>";
+  let html = '<div class="hint">' + assetsData.files.length + T(" 個檔案，在 <code>") + esc(assetsData.dir) + T("/</code>。把檔案拖進筆記或在編輯時貼上，會自動存到這裡並連結到那篇筆記。</div>");
+  if (!assetsData.files.length) html += T('<div class="hint">還沒有附件。') + (S.tree.vault ? "" : "") + "</div>";
   let folder = null;
   for (const f of fs) {
     const inside = f.path.startsWith(assetsData.dir + "/");     // or next to a note, as Obsidian allows
     const sub = inside ? f.path.slice(assetsData.dir.length + 1).split("/").slice(0, -1).join(" / ")
-      : "筆記資料夾裡：" + (dirOf(notesRel(f.path)).split("/").join(" / ") || "最上層");
+      : T("筆記資料夾裡：") + (dirOf(notesRel(f.path)).split("/").join(" / ") || T("最上層"));
     if (sub !== folder) {
-      if (sub || folder !== null) html += '<div class="group" data-dir="' + esc(inside ? assetsData.dir + (sub ? "/" + sub.split(" / ").join("/") : "") : dirOf(f.path)) + '">' + esc(sub || "（最上層）") + "</div>";
+      if (sub || folder !== null) html += '<div class="group" data-dir="' + esc(inside ? assetsData.dir + (sub ? "/" + sub.split(" / ").join("/") : "") : dirOf(f.path)) + '">' + esc(sub || T("（最上層）")) + "</div>";
       folder = sub;
     }
     const [, icon] = fileKind(f.path);
-    html += rowFile(f.path, f.path.split("/").pop(), '<span class="count">' + (f.used_by.length ? "" : '<span class="unused">沒有筆記用到</span> ') + fmtSize(f.size) + "</span>", icon);
+    html += rowFile(f.path, f.path.split("/").pop(), '<span class="count">' + (f.used_by.length ? "" : T('<span class="unused">沒有筆記用到</span> ')) + fmtSize(f.size) + "</span>", icon);
   }
   el.innerHTML = html;
 }
@@ -269,6 +272,7 @@ async function renderAssets(el, filter) {
 $("#tree").addEventListener("click", e => {
   const del = e.target.closest("[data-del]");
   if (del) { e.stopPropagation(); deleteFile(del.dataset.del); return; }
+  if (e.target.closest("[data-pdf-setup]")) { setupPdf(); return; }
   const row = e.target.closest(".row");
   if (!row) return;
   if (row.dataset.folder) {
@@ -307,8 +311,8 @@ $("#journal-btn").onclick = async () => {
     await refreshTree();
     S.sideTab = "journal"; store.set("side-tab", "journal"); renderTree();
     await openNote(r.path, { edit: true });
-    toast(r.created ? "建立了今天的日記。日記不送 Jev。" : "打開今天的日記。");
-  } catch (e) { toast("沒辦法建立日記：" + e.message); }
+    toast(r.created ? T("建立了今天的日記。日記不送 Jev。") : T("打開今天的日記。"));
+  } catch (e) { toast(T("沒辦法建立日記：") + e.message); }
 };
 
 // ---------- moving, importing and deleting files (raw/ only; wiki pages belong to the AI)
@@ -354,65 +358,78 @@ tree.addEventListener("drop", async e => {
 async function moveFile(path, dir) {
   if (dirOf(path) === dir) return;
   const f = S.tree.raw.find(x => x.path === path);
-  if (f && f.done && !(await dialog("搬移已整理的筆記？", "<p>「" + esc(baseName(path)) + "」已經整理成知識庫的來源頁，來源頁用路徑記住它（<code>source_path</code>）。</p><p>搬到「" + esc(dir) +
-    "」之後，這篇會暫時顯示成待整理，等 AI 下次整理時更新來源頁。連到它的 <code>[[連結]]</code> 用檔名，不受影響。</p>", "搬移"))) return;
+  if (f && f.done && !(await dialog(T("搬移已整理的筆記？"), T("<p>「") + esc(baseName(path)) + T("」已經整理成知識庫的來源頁，來源頁用路徑記住它（<code>source_path</code>）。</p><p>搬到「") + esc(dir) +
+    T("」之後，這篇會暫時顯示成待整理，等 AI 下次整理時更新來源頁。連到它的 <code>[[連結]]</code> 用檔名，不受影響。</p>"), T("搬移")))) return;
   try {
     const r = await api("/api/move", { path, dir });
     for (const t of S.tabs) if (t.path === path) { t.path = r.path; }
     if (tab() && tab().path === r.path) history.replaceState(Object.assign({}, history.state, { path: r.path }), "", "#" + encodeURIComponent(r.path));
     if (dir && dir !== ROOT() && S.sideTab === "raw") S.open.add(dir);
     await refreshTree();
-    toast("搬到 " + (notesRel(dir) && dir !== ROOT() ? notesRel(dir) + "/" : "筆記最上層"), { label: "復原", fn: () => moveFile(r.path, dirOf(path)) });
-  } catch (e) { toast("沒搬成：" + e.message); }
+    toast(T("搬到 ") + (notesRel(dir) && dir !== ROOT() ? notesRel(dir) + "/" : T("筆記最上層")), { label: T("復原"), fn: () => moveFile(r.path, dirOf(path)) });
+  } catch (e) { toast(T("沒搬成：") + e.message); }
 }
 
 async function importFiles(files, dir) {
-  let notes = 0, atts = 0, last = null;
+  let notes = 0, atts = 0, last = null, needPdf = false;
   for (const f of files) {
-    if (f.size > 200 * 1048576) { toast("「" + f.name + "」超過 200MB"); continue; }
+    if (f.size > 200 * 1048576) { toast(T("「") + f.name + T("」超過 200MB")); continue; }
     try {
       const r = await api("/api/import", { name: f.name, dir, data: await fileToBase64(f) });
       r.note ? notes++ : atts++; last = r.path;
-    } catch (e) { toast("「" + f.name + "」沒匯入：" + e.message); }
+      if (r.pdf_tool === false) needPdf = true;
+    } catch (e) { toast(T("「") + f.name + T("」沒匯入：") + e.message); }
   }
   if (!last) return;
   await refreshTree();
-  toast("匯入 " + (notes ? notes + " 篇筆記" : "") + (notes && atts ? "、" : "") + (atts ? atts + " 個附件" : "") + "。");
+  toast(T("匯入 ") + (notes ? notes + T(" 篇筆記") : "") + (notes && atts ? T("、") : "") + (atts ? atts + T(" 個附件") : "") + T("。"));
   if (files.length === 1) openNote(last);
+  if (needPdf) offerPdfSetup();
+}
+
+// A PDF needs converting into a note before it can be searched or organised; the first time, Lumen asks once and then
+// downloads the converter itself (the user never has to know its name).
+async function offerPdfSetup() {
+  if (!(await dialog(T("把 PDF 轉成筆記？"), T("<p>PDF 要先轉成筆記，才能搜尋、找連結、交給 AI 整理。</p><p>轉出來的是一篇文字筆記（.md 檔，任何筆記 app 和文字編輯器都打得開）：PDF 的文字照原本的頁序排好，每頁標上頁碼；書名、作者、出版年寫在筆記開頭；圖表另存成圖片，放回筆記裡原來的位置。有目錄的書會每章一篇，放在以書名命名的資料夾裡。掃描的 PDF 會先用 Mac 內建的文字辨識，錯字可能比較多。</p><p>原本的 PDF 留在附件裡，筆記開頭有連結可以打開它。第一次轉檔會先下載轉檔工具（大約一兩分鐘，只要一次），之後放進來的 PDF 都會自動轉。</p>"), T("轉成筆記")))) return;
+  await setupPdf();
+}
+async function setupPdf() {
+  try { await api("/api/pdf/setup", {}); toast(T("正在準備轉檔，完成後 PDF 會出現在筆記裡。")); queueData = null; renderTree(); }
+  catch (e) { toast(T("沒辦法開始轉檔：") + e.message); }
 }
 
 async function deleteFile(path) {
-  if (!mine(path)) { toast("知識庫的頁是 AI 維護的，不能從這裡刪。"); return; }
+  if (!mine(path)) { toast(T("知識庫的頁是 AI 維護的，不能從這裡刪。")); return; }
   let warn = [];
   try { warn = (await api("/api/delete", { path, dry: true })).warnings; } catch (e) {}
   const name = path.split("/").pop();
-  let body = "<p>會移到筆記庫的 <code>.trash/</code>（Obsidian 的垃圾桶），之後可以復原。</p>";
-  if (warn.includes("processed")) body += "<p>這篇已經整理成知識庫的來源頁。刪掉後來源頁和概念頁都還在，只是連不回原文。</p>";
+  let body = T("<p>會移到筆記庫的 <code>.trash/</code>（Obsidian 的垃圾桶），之後可以復原。</p>");
+  if (warn.includes("processed")) body += T("<p>這篇已經整理成知識庫的來源頁。刪掉後來源頁和概念頁都還在，只是連不回原文。</p>");
   const used = warn.find(w => w.startsWith("used:"));
-  if (used) body += "<p>有 " + used.slice(5) + " 篇筆記用到這個附件，刪掉後那些地方會顯示找不到。</p>";
+  if (used) body += T("<p>有 ") + used.slice(5) + T(" 篇筆記用到這個附件，刪掉後那些地方會顯示找不到。</p>");
   const t = S.tabs.find(x => x.path === path);
-  if (t && t.dirty) body += "<p>這篇還有沒儲存的修改，會一起丟掉。</p>";
-  if (!(await dialog("刪除「" + name + "」？", body, "刪除", true))) return;
+  if (t && t.dirty) body += T("<p>這篇還有沒儲存的修改，會一起丟掉。</p>");
+  if (!(await dialog(T("刪除「") + name + T("」？"), body, T("刪除"), true))) return;
   try {
     const r = await api("/api/delete", { path });
     for (let i = S.tabs.length - 1; i >= 0; i--) if (S.tabs[i].path === path) { S.tabs[i].dirty = false; closeTab(i); }
     await refreshTree();
-    toast("已刪除「" + name + "」。", { label: "復原", fn: async () => {
-      try { await api("/api/restore", { trash: r.trash, path: r.path }); await refreshTree(); toast("已復原。"); }
-      catch (e) { toast("沒辦法復原：" + e.message); }
+    toast(T("已刪除「") + name + T("」。"), { label: T("復原"), fn: async () => {
+      try { await api("/api/restore", { trash: r.trash, path: r.path }); await refreshTree(); toast(T("已復原。")); }
+      catch (e) { toast(T("沒辦法復原：") + e.message); }
     } });
-  } catch (e) { toast("沒刪成：" + e.message); }
+  } catch (e) { toast(T("沒刪成：") + e.message); }
 }
 
 async function htmlToNote(path, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = "轉換中…"; }
+  if (btn) { btn.disabled = true; btn.textContent = T("轉換中…"); }
   try {
     const r = await api("/api/html2note", { path });
     await refreshTree(); await loadAssets(true);
     if (tab() && tab().path === path) renderView();
     await openNote(r.path, { newTab: true });
-    toast(r.existing ? "這個網頁之前已經轉成筆記了，打開那一篇。" : "轉成筆記了，在筆記最上層。可以拖到別的資料夾。");
-  } catch (e) { toast("沒轉成：" + e.message); if (btn) { btn.disabled = false; btn.textContent = "轉成筆記"; } }
+    toast(r.existing ? T("這個網頁之前已經轉成筆記了，打開那一篇。") : T("轉成筆記了，在筆記最上層。可以拖到別的資料夾。"));
+  } catch (e) { toast(T("沒轉成：") + e.message); if (btn) { btn.disabled = false; btn.textContent = T("轉成筆記"); } }
 }
 
 // right-click menu on files and tabs
@@ -430,18 +447,18 @@ tree.addEventListener("contextmenu", e => {
   const f = e.target.closest(".row[data-folder]");
   if (f && !S.tree.read_only) {
     e.preventDefault();
-    showMenu(e.clientX, e.clientY, [{ label: "在這裡新增筆記", fn: () => newNote(f.dataset.folder) }]);
+    showMenu(e.clientX, e.clientY, [{ label: T("在這裡新增筆記"), fn: () => newNote(f.dataset.folder) }]);
     return;
   }
   const r = e.target.closest(".row[data-path]");
   if (!r) return;
   e.preventDefault();
-  const p = r.dataset.path, items = [{ label: "打開", fn: () => openNote(p) }, { label: "在新分頁打開", fn: () => openNote(p, { newTab: true }) }];
-  if (/\.html?$/i.test(p) && mine(p) && !S.tree.read_only) items.push({ label: "轉成筆記", fn: () => htmlToNote(p) });
+  const p = r.dataset.path, items = [{ label: T("打開"), fn: () => openNote(p) }, { label: T("在新分頁打開"), fn: () => openNote(p, { newTab: true }) }];
+  if (/\.html?$/i.test(p) && mine(p) && !S.tree.read_only) items.push({ label: T("轉成筆記"), fn: () => htmlToNote(p) });
   if (mine(p) && !S.tree.read_only) {
-    items.push(null, { label: "改名…", fn: () => renameFile(p) });
-    if (/\.md$/.test(p)) items.push({ label: "版本紀錄…", fn: () => showHistory(p) });
-    items.push({ label: "刪除…", danger: true, fn: () => deleteFile(p) });
+    items.push(null, { label: T("改名…"), fn: () => renameFile(p) });
+    if (/\.md$/.test(p)) items.push({ label: T("版本紀錄…"), fn: () => showHistory(p) });
+    items.push({ label: T("刪除…"), danger: true, fn: () => deleteFile(p) });
   }
   showMenu(e.clientX, e.clientY, items);
 });
@@ -452,8 +469,8 @@ function renderTabbar() {
   const bar = $("#tabbar");
   bar.hidden = S.tabs.length === 0;
   bar.innerHTML = S.tabs.map((t, i) => '<div class="tab' + (i === S.active ? " on" : "") + '" draggable="true" data-i="' + i + '" title="' + esc(t.path || "") + '">' +
-    (t.kind === "compare" ? '<span class="tab-kind">比較</span>' : t.kind === "file" ? '<span class="tab-kind file">' + fileKind(t.path)[1] + "</span>" : "") + '<span class="tab-title">' + esc(t.title) + "</span>" +
-    (t.dirty ? '<span class="tab-dirty" title="還沒儲存">●</span>' : "") + '<button class="tab-x" data-close="' + i + '" title="關閉">×</button></div>').join("");
+    (t.kind === "compare" ? T('<span class="tab-kind">比較</span>') : t.kind === "file" ? '<span class="tab-kind file">' + fileKind(t.path)[1] + "</span>" : "") + '<span class="tab-title">' + esc(t.title) + "</span>" +
+    (t.dirty ? T('<span class="tab-dirty" title="還沒儲存">●</span>') : "") + '<button class="tab-x" data-close="' + i + T('" title="關閉">×</button></div>')).join("");
 }
 
 $("#tabbar").addEventListener("click", e => {
@@ -471,9 +488,9 @@ $("#tabbar").addEventListener("contextmenu", e => {
   if (!el) return;
   e.preventDefault();
   const i = +el.dataset.i, t = S.tabs[i];
-  showMenu(e.clientX, e.clientY, [{ label: "關閉", fn: () => closeTab(S.tabs.indexOf(t)) },
-    { label: "關閉其他分頁", fn: () => { for (let j = S.tabs.length - 1; j >= 0; j--) if (S.tabs[j] !== t && !S.tabs[j].dirty) closeTab(j); } },
-    { label: "關閉右邊的分頁", fn: () => { for (let j = S.tabs.length - 1; j > S.tabs.indexOf(t); j--) if (!S.tabs[j].dirty) closeTab(j); } }]);
+  showMenu(e.clientX, e.clientY, [{ label: T("關閉"), fn: () => closeTab(S.tabs.indexOf(t)) },
+    { label: T("關閉其他分頁"), fn: () => { for (let j = S.tabs.length - 1; j >= 0; j--) if (S.tabs[j] !== t && !S.tabs[j].dirty) closeTab(j); } },
+    { label: T("關閉右邊的分頁"), fn: () => { for (let j = S.tabs.length - 1; j > S.tabs.indexOf(t); j--) if (!S.tabs[j].dirty) closeTab(j); } }]);
 });
 // drag a tab to reorder; the active tab stays active wherever it goes
 let dragTab = null;
@@ -513,7 +530,7 @@ function stash() {
   if (!t) return;
   t.scroll = $(".center").scrollTop;
   const ed = $("#editor");
-  if (t.editing && ed) t.editText = ed.value;
+  if (t.editing && ed) t.editText = Wys.value(ed);
 }
 
 // ---------- back / forward
@@ -564,7 +581,7 @@ function activate(i, push = true) {
 
 function closeTab(i) {
   const t = S.tabs[i];
-  if (t.dirty && !confirm("「" + t.title + "」還沒儲存，確定關閉？")) return;
+  if (t.dirty && !confirm(T("「") + t.title + T("」還沒儲存，確定關閉？"))) return;
   stash();
   S.tabs.splice(i, 1);
   if (S.active >= S.tabs.length) S.active = S.tabs.length - 1;
@@ -603,7 +620,7 @@ function openCompare(s) {
   const key = "compare:" + s.key;
   const i = S.tabs.findIndex(t => t.id === key);
   if (i >= 0) { activate(i); return; }
-  const t = { id: key, kind: "compare", title: s.topic.title + "：兩種說法", s, notes: [null, null] };
+  const t = { id: key, kind: "compare", title: s.topic.title + T("：兩種說法"), s, notes: [null, null] };
   S.tabs.push(t); S.active = S.tabs.length - 1; navRecord();
   renderTabbar(); renderView(); loadPanel();
   Promise.all([s.a.path, s.b.path].map(p => api("/api/note?path=" + encodeURIComponent(p)).catch(e => ({ error: e.message })))).then(ns => {
@@ -622,22 +639,22 @@ function headHtml(n, t) {
   const renamable = n.editable;           // your own note: click the title to rename (file name, and `title:` if it has one)
   const chips = [];
   if (n.page) {
-    chips.push('<span class="chip ai">AI 整理 · ' + esc(TYPE_ZH[n.page.type] || n.page.type) + "</span>");
-    if (n.page.updated) chips.push("更新 " + esc(n.page.updated));
-    if (n.page.aliases.length) chips.push("又名 " + n.page.aliases.slice(0, 6).map(esc).join("、"));
+    chips.push(T('<span class="chip ai">AI 整理 · ') + esc(TYPE_ZH[n.page.type] || n.page.type) + "</span>");
+    if (n.page.updated) chips.push(T("更新 ") + esc(n.page.updated));
+    if (n.page.aliases.length) chips.push(T("又名 ") + n.page.aliases.slice(0, 6).map(esc).join(T("、")));
   } else {
-    chips.push('<span class="chip">你的筆記</span>');
+    chips.push(T('<span class="chip">你的筆記</span>'));
     if (fm.author) chips.push(esc(fm.author.replace(/[\[\]"]/g, "")));
-    if (fm.source && /^https?:/.test(fm.source)) chips.push('<a href="' + esc(fm.source) + '" target="_blank" rel="noopener">原文</a>');
+    if (fm.source && /^https?:/.test(fm.source)) chips.push('<a href="' + esc(fm.source) + T('" target="_blank" rel="noopener">原文</a>'));
     if (fm.pdf) {
       const rel = attachmentRel(fm.pdf.replace(/^\[\[|\]\]$/g, ""));
-      if (rel) chips.push(attLink(rel, "原始 PDF"));
-      chips.push('<button class="link-btn" data-act="pdf-layout" title="PDF 轉出來的筆記常有斷行、頁首頁尾和圖中文字。整理只影響顯示，檔案不變。">' + (S.pdfTidy ? "顯示原始排版" : "整理排版") + "</button>");
+      if (rel) chips.push(attLink(rel, T("原始 PDF")));
+      chips.push(T('<button class="link-btn" data-act="pdf-layout" title="PDF 轉出來的筆記常有斷行、頁首頁尾和圖中文字。整理只影響顯示，檔案不變。">') + (S.pdfTidy ? T("顯示原始排版") : T("整理排版")) + "</button>");
     }
-    if (n.private) chips.push('<span class="chip todo">日記：不送 Jev</span>');
+    if (n.private) chips.push(T('<span class="chip todo">日記：不送 Jev</span>'));
   }
   chips.push('<span title="' + esc(n.path) + '">' + esc(n.path.split("/").slice(0, -1).join(" / ")) + "</span>");
-  return (renamable ? '<h1 class="renamable" data-act="rename" title="點一下改名">' : "<h1>") + esc(title) + '</h1><div class="meta">' + chips.join("<span>·</span>") + "</div>" +
+  return (renamable ? T('<h1 class="renamable" data-act="rename" title="點一下改名">') : "<h1>") + esc(title) + '</h1><div class="meta">' + chips.join("<span>·</span>") + "</div>" +
     (n.page && n.page.summary ? '<p class="summary">' + esc(n.page.summary) + "</p>" : "");
 }
 
@@ -646,7 +663,7 @@ function bodyHtml(n, full) {
   const h1 = body.match(/^\s*# +(.+)\n/);
   if (h1 && n.page && h1[1].trim() === n.page.title) body = body.slice(h1[0].length);
   if (S.pdfTidy && /^---\n[\s\S]*?\npdf:/.test(n.text)) body = tidyPdf(body);
-  if (!full && body.length > RENDER_MAX) return md(body.slice(0, RENDER_MAX)) + '<div class="truncated">這篇很長，先顯示前 ' + Math.round(RENDER_MAX / 1000) + 'k 字元。<button data-show-all>全部顯示</button></div>';
+  if (!full && body.length > RENDER_MAX) return md(body.slice(0, RENDER_MAX)) + T('<div class="truncated">這篇很長，先顯示前 ') + Math.round(RENDER_MAX / 1000) + T('k 字元。<button data-show-all>全部顯示</button></div>');
   return md(body);
 }
 
@@ -654,8 +671,8 @@ function renderView() {
   const v = $("#view"), t = tab();
   v.dataset.tab = t ? String(t.id) : "";
   if (!t) {
-    v.innerHTML = '<div class="empty"><h2>從左邊打開一篇筆記</h2><p class="muted">⌘／Ctrl＋點擊在新分頁打開。</p></div>';
-    $("#panel").innerHTML = '<div class="panel-empty muted">打開筆記後，這裡會出現連結和建議。</div>';
+    v.innerHTML = T('<div class="empty"><h2>從左邊打開一篇筆記</h2><p class="muted">⌘／Ctrl＋點擊在新分頁打開。</p></div>');
+    $("#panel").innerHTML = T('<div class="panel-empty muted">打開筆記後，這裡會出現連結和建議。</div>');
     return;
   }
   if (t.kind === "compare") return renderCompare(v, t);
@@ -664,16 +681,18 @@ function renderView() {
   if (t.error) { v.innerHTML = '<p class="muted pad">' + esc(t.error) + "</p>"; return; }
   const n = t.note;
   let tools = "";
-  if (n.editable) tools = '<div class="note-tools">' + '<button data-act="history" class="ghost" title="這篇以前的版本，可以還原">版本</button>' +
-    '<button data-act="delete" class="ghost" title="移到垃圾桶，可復原">' + TRASH_SVG + " 刪除</button>" + (t.editing ? '<button data-act="preview">預覽</button><button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>' :
-    '<button data-act="edit">編輯</button>' + (t.dirty ? '<button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>' : "")) + '<span class="muted save-msg">' + esc(t.msg || (t.editing ? "⌘S 儲存 · 拖進或貼上檔案會存成附件" : "")) + "</span></div>";
-  if (t.external) tools += '<div class="banner">這篇在別處被改過。<button data-act="reload">載入新版本</button>（你這裡的修改會不見）</div>';
+  if (n.editable) tools = '<div class="note-tools">' + T('<button data-act="history" class="ghost" title="這篇以前的版本，可以還原">版本</button>') +
+    T('<button data-act="delete" class="ghost" title="移到垃圾桶，可復原">') + TRASH_SVG + T(" 刪除</button>") + (t.editing ? T('<button data-act="preview" title="離開編輯（修改還沒存，記得儲存）">完成</button><button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>') :
+    T('<button data-act="edit">編輯</button>') + (t.dirty ? T('<button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>') : "")) + '<span class="muted save-msg">' + esc(t.msg || (t.editing ? T("⌘S 儲存 · 拖進或貼上檔案會存成附件") : "")) + "</span></div>";
+  if (t.external) tools += T('<div class="banner">這篇在別處被改過。<button data-act="reload">載入新版本</button>（你這裡的修改會不見）</div>');
   v.innerHTML = '<div class="note-head">' + headHtml(n, t) + "</div>" + tools +
-    (t.editing ? '<textarea id="editor" class="editor" spellcheck="false"></textarea>' : '<article id="note" class="note">' + bodyHtml(n, t.full) + "</article>");
+    (t.editing ? '<div id="editor" class="editor wys" contenteditable="true" spellcheck="false"></div>' : '<article id="note" class="note">' + bodyHtml(n, t.full) + "</article>");
   if (t.editing) {
     const ed = $("#editor");
-    ed.value = t.editText ?? n.text;
-    ed.addEventListener("input", () => { t.editText = ed.value; if (!t.dirty) { t.dirty = true; renderTabbar(); } });
+    Wys.mount(ed, t.editText ?? n.text);
+    Wys.attach(ed, () => { if (!t.dirty) { t.dirty = true; renderTabbar(); } });
+    ed._open = name => { const rel = resolveLink(name) || attachmentRel(name); if (rel) openNote(rel, { newTab: true }); };
+    ed.before(Wys.bar(ed, pickAttachments));
   }
   $(".center").scrollTop = t.scroll || 0;
   if (t.renameNow) { t.renameNow = false; startTitleRename(t); }
@@ -687,8 +706,8 @@ function renderCompare(v, t) {
     if (n.error) return '<div class="cmp-col"><p class="muted">' + esc(n.error) + "</p></div>";
     return '<div class="cmp-col" data-side="' + side + '"><div class="cmp-tag">' + side + '</div><div class="note-head">' + headHtml(n) + '</div><article class="note small">' + bodyHtml(n, true) + "</article></div>";
   };
-  v.innerHTML = '<div class="cmp-head">Jev 認為這兩個來源對 <a data-open="' + esc(s.topic.path) + '">' + esc(s.topic.title) + "</a> 的說法可能衝突（" + s.p.toFixed(2) +
-    "）。兩邊提到它的地方已經標出來。" + '<button data-act="next-hl">下一處</button></div><div class="cmp">' + col(t.notes[0], "A") + '<div class="gutter cmp-g" title="拖曳調整，雙擊回到一半"></div>' + col(t.notes[1], "B") + "</div>";
+  v.innerHTML = T('<div class="cmp-head">Jev 認為這兩個來源對 <a data-open="') + esc(s.topic.path) + '">' + esc(s.topic.title) + T("</a> 的說法可能衝突（") + s.p.toFixed(2) +
+    T("）。兩邊提到它的地方已經標出來。") + T('<button data-act="next-hl">下一處</button></div><div class="cmp">') + col(t.notes[0], "A") + T('<div class="gutter cmp-g" title="拖曳調整，雙擊回到一半"></div>') + col(t.notes[1], "B") + "</div>";
   if (t.notes[0] && t.notes[1]) {
     const names = [s.topic.title, ...(s.topic.aliases || [])];
     v.querySelectorAll(".cmp-col .note").forEach(el => highlight(names, el, false));
@@ -699,26 +718,26 @@ function renderFile(v, t) {
   const u = "/file?path=" + encodeURIComponent(t.path), [kind] = fileKind(t.path);
   const info = assetsData && assetsData.files.find(f => f.path === t.path);
   let body;
-  if (kind === "圖片") body = '<img class="file-img" src="' + u + '" alt="">';
+  if (kind === T("圖片")) body = '<img class="file-img" src="' + u + '" alt="">';
   else if (kind === "PDF") body = '<iframe class="file-frame" src="' + u + '"></iframe>';
-  else if (kind === "網頁") {
+  else if (kind === T("網頁")) {
     const made = info && info.note;
     body = '<div class="to-note">' + (made
-      ? '<div><strong>已經轉成筆記</strong>：<a class="wl" data-path="' + esc(made) + '">' + esc(baseName(made)) + "</a></div>" +
-        '<div class="muted">網頁的文字已經在那篇筆記裡，可以搜尋、找連結、交給 AI 整理。這裡的預覽是原始網頁的樣子。</div>'
-      : '<div class="to-note-row"><div><strong>這裡只是預覽</strong>：網頁還只是一個附件，裡面的文字不會被搜尋、不會找連結，AI 也不會整理它。</div>' +
-        (S.tree.read_only ? "" : '<button data-act="html2note" class="primary">轉成筆記</button>') + "</div>" +
-        '<div class="muted">轉成筆記：把網頁的正文（去掉選單、側欄、廣告和程式）存成一篇筆記，格式跟 Web Clipper 剪下來的一樣，並連回這個原檔。原檔留在附件裡。</div>') +
-      '</div><iframe class="file-frame" sandbox src="' + u + '"></iframe><div class="note-line">預覽在隔離的框裡，網頁的程式不會執行，碰不到你的筆記。</div>';
+      ? T('<div><strong>已經轉成筆記</strong>：<a class="wl" data-path="') + esc(made) + '">' + esc(baseName(made)) + "</a></div>" +
+        T('<div class="muted">網頁的文字已經在那篇筆記裡，可以搜尋、找連結、交給 AI 整理。這裡的預覽是原始網頁的樣子。</div>')
+      : T('<div class="to-note-row"><div><strong>這裡只是預覽</strong>：網頁還只是一個附件，裡面的文字不會被搜尋、不會找連結，AI 也不會整理它。</div>') +
+        (S.tree.read_only ? "" : T('<button data-act="html2note" class="primary">轉成筆記</button>')) + "</div>" +
+        T('<div class="muted">轉成筆記：把網頁的正文（去掉選單、側欄、廣告和程式）存成一篇筆記，格式跟 Web Clipper 剪下來的一樣，並連回這個原檔。原檔留在附件裡。</div>')) +
+      '</div><iframe class="file-frame" sandbox src="' + u + T('"></iframe><div class="note-line">預覽在隔離的框裡，網頁的程式不會執行，碰不到你的筆記。</div>');
   }
-  else if (kind === "音訊") body = '<audio controls src="' + u + '"></audio>';
-  else if (kind === "影片") body = '<video class="file-img" controls src="' + u + '"></video>';
-  else if (kind === "文字") body = '<iframe class="file-frame text" src="' + u + '"></iframe>';
-  else body = '<p class="muted">這種檔案沒辦法在這裡預覽。</p>';
-  v.innerHTML = '<div class="note-head"><h1>' + esc(t.title) + '</h1><div class="meta"><span class="chip">附件 · ' + kind + "</span>" +
+  else if (kind === T("音訊")) body = '<audio controls src="' + u + '"></audio>';
+  else if (kind === T("影片")) body = '<video class="file-img" controls src="' + u + '"></video>';
+  else if (kind === T("文字")) body = '<iframe class="file-frame text" src="' + u + '"></iframe>';
+  else body = T('<p class="muted">這種檔案沒辦法在這裡預覽。</p>');
+  v.innerHTML = '<div class="note-head"><h1>' + esc(t.title) + T('</h1><div class="meta"><span class="chip">附件 · ') + kind + "</span>" +
     (info ? "<span>·</span>" + fmtSize(info.size) : "") + "<span>·</span><span>" + esc(t.path.split("/").slice(0, -1).join(" / ")) + "</span><span>·</span>" +
-    '<a href="' + u + '" target="_blank" rel="noopener">在新視窗打開</a>' + (kind === "檔案" ? '<span>·</span><a href="' + u + '" download>下載</a>' : "") +
-    (!S.tree.read_only ? '<span>·</span><a data-act="delete">刪除</a>' : "") + '</div></div><div class="file-body">' + body + "</div>";
+    '<a href="' + u + T('" target="_blank" rel="noopener">在新視窗打開</a>') + (kind === T("檔案") ? '<span>·</span><a href="' + u + T('" download>下載</a>') : "") +
+    (!S.tree.read_only ? T('<span>·</span><a data-act="delete">刪除</a>') : "") + '</div></div><div class="file-body">' + body + "</div>";
 }
 
 function startEdit() {
@@ -734,14 +753,14 @@ async function save() {
 }
 async function saveTab(t) {
   if (!t || t.kind !== "note" || !(t.editing || t.dirty)) return;
-  const text = t.editing ? $("#editor").value : t.editText;
+  const text = t.editing && $("#editor") ? Wys.value($("#editor")) : t.editText;
   try {
     const r = await api("/api/save", { path: t.path, text, mtime: t.note.mtime });
     t.note.text = text; t.note.mtime = r.mtime; t.dirty = false; t.editText = text; t.external = false;
     const d = new Date();
-    t.msg = "已儲存 " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    t.msg = T("已儲存 ") + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
     renderTabbar(); renderView(); loadPanel(true);
-  } catch (e) { t.msg = "沒存成：" + e.message; renderView(); }
+  } catch (e) { t.msg = T("沒存成：") + e.message; renderView(); }
 }
 
 async function reloadTab(t) {
@@ -766,9 +785,9 @@ $("#view").addEventListener("click", e => {
   const t = tab();
   const act = b.dataset.act;
   if (act === "edit") startEdit();
-  else if (act === "preview") { t.editText = $("#editor").value; t.editing = false; t.note = Object.assign({}, t.note, { text: t.editText }); renderView(); }
+  else if (act === "preview") { t.editText = Wys.value($("#editor")); t.editing = false; t.note = Object.assign({}, t.note, { text: t.editText }); renderView(); }
   else if (act === "save") save();
-  else if (act === "revert") { if (!t.dirty || confirm("放棄還沒儲存的修改？")) { t.editing = false; reloadTab(t); } }
+  else if (act === "revert") { if (!t.dirty || confirm(T("放棄還沒儲存的修改？"))) { t.editing = false; reloadTab(t); } }
   else if (act === "reload") reloadTab(t);
   else if (act === "next-hl") nextHighlight();
   else if (act === "delete") deleteFile(t.path);
@@ -798,30 +817,43 @@ function fileToBase64(file) {
 async function attach(files) {
   const t = tab();
   if (!t || t.kind !== "note" || !t.note) return;
-  if (!t.note.editable) { toast(t.note.raw ? "唯讀模式，不能加附件。" : "知識庫的頁是 AI 寫的，附件請加在你自己的筆記。"); return; }
+  if (!t.note.editable) { toast(t.note.raw ? T("唯讀模式，不能加附件。") : T("知識庫的頁是 AI 寫的，附件請加在你自己的筆記。")); return; }
   const links = [];
   for (const f of files) {
     try {
       const r = await api("/api/attach", { name: f.name || "pasted.png", data: await fileToBase64(f) });
       TREE.images[r.name.toLowerCase()] = r.path; assetsData = null;
+      if (r.pdf_tool === false) setTimeout(offerPdfSetup, 4000);
       links.push((r.image ? "![[" : "[[") + r.name + "]]");
-    } catch (e) { toast("「" + f.name + "」沒存成：" + e.message); }
+    } catch (e) { toast(T("「") + f.name + T("」沒存成：") + e.message); }
   }
   if (!links.length) return;
   const ins = links.join("\n");
   if (t.editing) {
     const ed = $("#editor");
-    const a = ed.selectionStart, b = ed.selectionEnd;
-    ed.value = ed.value.slice(0, a) + ins + ed.value.slice(b);
-    ed.selectionStart = ed.selectionEnd = a + ins.length;
-    ed.dispatchEvent(new Event("input"));
-    toast("附件存進 " + S.tree.attach_to + "/，連結插在游標處。記得儲存。");
+    ed.focus();
+    Wys.insertMd(ed, ins);
+    toast(T("附件存進 ") + S.tree.attach_to + T("/，連結插在游標處。記得儲存。"));
   } else {
-    if (t.dirty) { toast("先儲存或放棄修改，再加附件。"); return; }
+    if (t.dirty) { toast(T("先儲存或放棄修改，再加附件。")); return; }
     t.editing = true; t.editText = t.note.text.replace(/\s*$/, "") + "\n\n" + ins + "\n"; t.dirty = true;
     renderTabbar(); renderView(); await save(); t.editing = false; renderView();
-    toast("附件存進 " + S.tree.attach_to + "/，連結加在筆記最後。");
+    toast(T("附件存進 ") + S.tree.attach_to + T("/，連結加在筆記最後。"));
   }
+}
+
+// the editor's 📎 button: pick images or files; they go in as attachments at the caret
+let PICK_RANGE = null;
+function pickAttachments() {
+  const s = getSelection();
+  PICK_RANGE = s.rangeCount && $("#editor") && $("#editor").contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null;
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.multiple = true;
+  inp.addEventListener("change", () => {
+    if (PICK_RANGE) { const s2 = getSelection(); s2.removeAllRanges(); s2.addRange(PICK_RANGE); }
+    if (inp.files.length) attach([...inp.files]);
+  });
+  inp.click();
 }
 
 const view = $("#view");
@@ -834,7 +866,7 @@ view.addEventListener("drop", e => {
 });
 view.addEventListener("paste", e => {
   const files = [...(e.clipboardData ? e.clipboardData.files : [])];
-  if (files.length && e.target.id === "editor") { e.preventDefault(); attach(files); }
+  if (files.length && e.target.closest && e.target.closest("#editor")) { e.preventDefault(); attach(files); }
 });
 
 // ---------- highlight names in a note
@@ -877,26 +909,26 @@ function nextHighlight() {
 
 // ============================================================ right panel
 
-const W_LABEL = { 2: "主題", 1: "有討論", 0: "順帶提到" };
+const W_LABEL = { 2: T("主題"), 1: T("有討論"), 0: T("順帶提到") };
 
 function mentionRow(m) {
   const no = m.refers != null && m.refers <= 0.2;
   const unsure = m.refers != null && m.refers > 0.2 && m.refers < 0.8;
-  const tag = m.refers == null ? "" : no ? "可能不是" : unsure ? "待確認 " + m.refers.toFixed(2) : (m.weight != null ? W_LABEL[m.weight] : "Jev " + m.refers.toFixed(2));
+  const tag = m.refers == null ? "" : no ? T("可能不是") : unsure ? T("待確認 ") + m.refers.toFixed(2) : (m.weight != null ? W_LABEL[m.weight] : "Jev " + m.refers.toFixed(2));
   return '<div class="mention' + (no ? " no" : "") + '" data-path="' + esc(m.path) + '" data-names="' + esc(JSON.stringify([m.title, ...(m.aliases || []), ...m.matched])) +
     '"><span class="w' + (m.weight != null ? " w" + m.weight : "") + '"></span><span><span class="t">' + esc(m.title) + '</span> <span class="muted">' + esc(TYPE_ZH[m.type] || "") +
     '</span><span class="s">' + esc(m.summary) + '</span></span><span class="x">×' + m.n + (tag ? "<br>" + esc(tag) : "") + "</span></div>";
 }
 
 function suggestionCard(s) {
-  return '<div class="card contra" data-key="' + esc(s.key) + '"><div class="kind">可能矛盾 · Jev ' + s.p.toFixed(2) + '</div><div class="body">' +
-    '<a data-path="' + esc(s.a.path) + '">' + esc(s.a.title) + '</a> 和 <a data-path="' + esc(s.b.path) + '">' + esc(s.b.title) + "</a> 對 " +
-    '<a data-path="' + esc(s.topic.path) + '">' + esc(s.topic.title) + "</a> 的說法可能衝突。</div>" +
-    '<div class="acts"><button data-compare="' + esc(s.key) + '">並排比較</button><button data-dismiss="' + esc(s.key) + '">看過，沒問題</button></div></div>';
+  return '<div class="card contra" data-key="' + esc(s.key) + T('"><div class="kind">可能矛盾 · Jev ') + s.p.toFixed(2) + '</div><div class="body">' +
+    '<a data-path="' + esc(s.a.path) + '">' + esc(s.a.title) + T('</a> 和 <a data-path="') + esc(s.b.path) + '">' + esc(s.b.title) + T("</a> 對 ") +
+    '<a data-path="' + esc(s.topic.path) + '">' + esc(s.topic.title) + T("</a> 的說法可能衝突。</div>") +
+    '<div class="acts"><button data-compare="' + esc(s.key) + T('">並排比較</button><button data-dismiss="') + esc(s.key) + T('">看過，沒問題</button></div></div>');
 }
 
 function recordedCard(r) {
-  const label = { contradiction: "已記錄的矛盾", positions: "不同看法（立場）", question: "待解的問題" }[r.kind] || r.kind;
+  const label = { contradiction: T("已記錄的矛盾"), positions: T("不同看法（立場）"), question: T("待解的問題") }[r.kind] || r.kind;
   return '<div class="card ' + (r.kind === "contradiction" ? "contra" : "positions") + '"><div class="kind">' + label + '</div><details><summary>' + inline(r.title) + "</summary><div>" + md(r.text) + "</div></details></div>";
 }
 
@@ -909,7 +941,7 @@ async function loadPanel(force) {
   if (!t.note) { el.innerHTML = '<p class="muted"><span class="spin"></span></p>'; return; }
   const path = t.path;
   if (!force && S.panelFor === path && panelData) return renderPanel(panelData);
-  el.innerHTML = '<p class="muted"><span class="spin"></span> 找連結…</p>';
+  el.innerHTML = T('<p class="muted"><span class="spin"></span> 找連結…</p>');
   let p;
   try { p = await api("/api/panel?path=" + encodeURIComponent(path)); }
   catch (e) { el.innerHTML = '<p class="muted">' + esc(e.message) + "</p>"; return; }
@@ -926,65 +958,65 @@ async function renderFilePanel(t) {
   if (tab() !== t) return;
   const f = assetsData.files.find(x => x.path === t.path);
   const used = f ? f.used_by : [];
-  el.innerHTML = '<h3>用到這個檔案的筆記 <span class="n">' + used.length + "</span></h3>" +
+  el.innerHTML = T('<h3>用到這個檔案的筆記 <span class="n">') + used.length + "</span></h3>" +
     (used.length ? '<div class="linklist">' + used.map(p => '<a data-path="' + esc(p) + '">' + esc(baseName(p)) + "</a>").join("") + "</div>"
-      : '<div class="note-line">沒有筆記連到它。把它拖進一篇筆記，或在筆記裡寫 <code>![[' + esc(t.title) + "]]</code>。</div>") +
-    '<div class="note-line" style="margin-top:16px">附件不送 Jev，也不參加名稱比對。</div>';
+      : T('<div class="note-line">沒有筆記連到它。把它拖進一篇筆記，或在筆記裡寫 <code>![[') + esc(t.title) + T("]]</code>。</div>")) +
+    T('<div class="note-line" style="margin-top:16px">附件不送 Jev，也不參加名稱比對。</div>');
   if (tab() === t && t.kind === "file") renderView();      // size now known
 }
 
 function renderComparePanel(t) {
   const s = t.s;
-  $("#panel").innerHTML = "<h3>正在比較</h3>" + suggestionCard(s).replace('<button data-compare="' + esc(s.key) + '">並排比較</button>', "") +
-    '<div class="note-line">看完兩邊：如果真的衝突，請 AI 在 <a data-path="' + esc(s.topic.path) + '">' + esc(s.topic.title) +
-    "</a> 加一個矛盾或「不同看法」段落；如果只是談不同面向，按「看過，沒問題」，它就不會再出現。</div>";
+  $("#panel").innerHTML = T("<h3>正在比較</h3>") + suggestionCard(s).replace('<button data-compare="' + esc(s.key) + T('">並排比較</button>'), "") +
+    T('<div class="note-line">看完兩邊：如果真的衝突，請 AI 在 <a data-path="') + esc(s.topic.path) + '">' + esc(s.topic.title) +
+    T("</a> 加一個矛盾或「不同看法」段落；如果只是談不同面向，按「看過，沒問題」，它就不會再出現。</div>");
 }
 
 function renderPanel(p) {
   const el = $("#panel"), isRaw = mine(p.path);
-  let html = '<h3>建議 <span class="n">' + (p.suggestions.length || "") + "</span></h3>";
-  html += p.suggestions.length ? p.suggestions.map(suggestionCard).join("") : '<div class="note-line">沒有需要你看的事。</div>';
-  if (p.unsure) html += '<div class="note-line">另有 ' + p.unsure + " 對 Jev 不確定的說法差異沒列出：大約六成不是真矛盾，要等 AI 檢查知識庫時讀過，才會變成建議。</div>";
-  if (p.stale) html += '<div class="note-line">' + p.stale + " 對的判斷做完之後，相關頁面又改過，判斷可能過時，先不列。下次檢查知識庫時會重新判斷。</div>";
-  if (p.suggestions.length || p.unsure) html += '<div class="note-line">這些判斷是檢查知識庫時存下來的，Jev 關掉也看得到。</div>';
-  if (p.recorded && p.recorded.length) html += "<h3>這頁記下的爭議</h3>" + p.recorded.map(recordedCard).join("");
+  let html = T('<h3>建議 <span class="n">') + (p.suggestions.length || "") + "</span></h3>";
+  html += p.suggestions.length ? p.suggestions.map(suggestionCard).join("") : T('<div class="note-line">沒有需要你看的事。</div>');
+  if (p.unsure) html += T('<div class="note-line">另有 ') + p.unsure + T(" 對 Jev 不確定的說法差異沒列出：大約六成不是真矛盾，要等 AI 檢查知識庫時讀過，才會變成建議。</div>");
+  if (p.stale) html += '<div class="note-line">' + p.stale + T(" 對的判斷做完之後，相關頁面又改過，判斷可能過時，先不列。下次檢查知識庫時會重新判斷。</div>");
+  if (p.suggestions.length || p.unsure) html += T('<div class="note-line">這些判斷是檢查知識庫時存下來的，Jev 關掉也看得到。</div>');
+  if (p.recorded && p.recorded.length) html += T("<h3>這頁記下的爭議</h3>") + p.recorded.map(recordedCard).join("");
 
   if (isRaw) {
     if (p.organized) {
-      html += '<h3>已整理成</h3><div class="linklist"><a data-path="' + esc(p.organized.source.path) + '"><strong>' + esc(p.organized.source.title) + "</strong></a></div>";
-      if (p.organized.pages.length) html += '<div class="note-line">累積到 ' + p.organized.pages.length + ' 個概念・人物頁：</div><div class="linklist">' +
+      html += T('<h3>已整理成</h3><div class="linklist"><a data-path="') + esc(p.organized.source.path) + '"><strong>' + esc(p.organized.source.title) + "</strong></a></div>";
+      if (p.organized.pages.length) html += T('<div class="note-line">累積到 ') + p.organized.pages.length + T(' 個概念・人物頁：</div><div class="linklist">') +
         p.organized.pages.slice(0, 30).map(c => '<a data-path="' + esc(c.path) + '">' + esc(c.title) + "</a>").join("") + "</div>";
     } else if (!p.private) {
-      html += '<h3>還沒整理</h3><div class="note-line">' + (p.triage ? "Jev 的判斷：" + esc(QUEUE_LABEL[p.triage.decision] || p.triage.decision) + "（優先度 " + esc(p.triage.priority) + "）。" : "還沒排進佇列。") +
+      html += T('<h3>還沒整理</h3><div class="note-line">') + (p.triage ? T("Jev 的判斷：") + esc(QUEUE_LABEL[p.triage.decision] || p.triage.decision) + T("（優先度 ") + esc(p.triage.priority) + T("）。") : T("還沒排進佇列。")) +
         "</div>" + (S.tree.read_only ? "" : '<div class="ai-acts"><button data-ingest-note="' + esc(p.path) + '">' + ingestLabel(p.path) + "</button></div>");
     }
   }
 
   const atts = noteAttachments(tab() && tab().note ? tab().note.text : "");
-  if (atts.length) html += '<h3>這篇的附件 <span class="n">' + atts.length + '</span></h3><div class="linklist">' +
+  if (atts.length) html += T('<h3>這篇的附件 <span class="n">') + atts.length + '</span></h3><div class="linklist">' +
     atts.map(a => '<a data-path="' + esc(a) + '">' + fileKind(a)[1] + " " + esc(a.split("/").pop()) + "</a>").join("") + "</div>";
 
   const unlinked = p.mentions.filter(m => !m.linked), linked = p.mentions.filter(m => m.linked);
-  html += '<h3>潛在連結 <span class="n">' + (unlinked.length || "") + "</span></h3>";
+  html += T('<h3>潛在連結 <span class="n">') + (unlinked.length || "") + "</span></h3>";
   if (isRaw) {
-    if (p.private) html += '<div class="banner">日記不送 Jev，只用名稱比對。</div>';
-    else if (S.checking.has(p.path)) html += '<div class="banner ok"><span class="spin"></span> Jev 正在判斷每個名稱是不是真的指那一頁…</div>';
-    else if (!p.checked && unlinked.length) html += jevUsable() ? '<div class="note-line">目前只是名稱比對。<a id="check-now">用 Jev 判斷</a>（送出名稱前後的片段）' +
-      (p.stale_check ? "：筆記改過，之前的判斷已過期。" : "") + "</div>" : '<div class="note-line">只用名稱比對' + (S.tree.jev ? "（Jev 已關閉）" : "（沒有 Jev 金鑰）") + "：同名的不同東西也會列進來。</div>";
+    if (p.private) html += T('<div class="banner">日記不送 Jev，只用名稱比對。</div>');
+    else if (S.checking.has(p.path)) html += T('<div class="banner ok"><span class="spin"></span> Jev 正在判斷每個名稱是不是真的指那一頁…</div>');
+    else if (!p.checked && unlinked.length) html += jevUsable() ? T('<div class="note-line">目前只是名稱比對。<a id="check-now">用 Jev 判斷</a>（送出名稱前後的片段）') +
+      (p.stale_check ? T("：筆記改過，之前的判斷已過期。") : "") + "</div>" : T('<div class="note-line">只用名稱比對') + (S.tree.jev ? T("（Jev 已關閉）") : T("（沒有 Jev 金鑰）")) + T("：同名的不同東西也會列進來。</div>");
   }
-  if (!unlinked.length) html += '<div class="note-line">沒找到提到卻沒連的頁面。</div>';
+  if (!unlinked.length) html += T('<div class="note-line">沒找到提到卻沒連的頁面。</div>');
   else if (isRaw && p.checked) {
-    const groups = [["主題", m => m.refers >= 0.8 && m.weight === 2], ["有討論", m => m.refers >= 0.8 && m.weight === 1], ["順帶提到", m => m.refers >= 0.8 && !m.weight],
-      ["待確認", m => m.refers > 0.2 && m.refers < 0.8], ["名稱沒被 Jev 看過", m => m.refers == null], ["可能不是這一頁", m => m.refers <= 0.2]];
+    const groups = [[T("主題"), m => m.refers >= 0.8 && m.weight === 2], [T("有討論"), m => m.refers >= 0.8 && m.weight === 1], [T("順帶提到"), m => m.refers >= 0.8 && !m.weight],
+      [T("待確認"), m => m.refers > 0.2 && m.refers < 0.8], [T("名稱沒被 Jev 看過"), m => m.refers == null], [T("可能不是這一頁"), m => m.refers <= 0.2]];
     for (const [label, f] of groups) {
       const ms = unlinked.filter(f);
       if (ms.length) html += '<div class="sub">' + label + " · " + ms.length + "</div>" + ms.map(mentionRow).join("");
     }
   } else html += unlinked.slice(0, 60).map(mentionRow).join("");
-  if (linked.length) html += '<h3>已連結 <span class="n">' + linked.length + "</span></h3>" + linked.slice(0, 40).map(mentionRow).join("");
-  if (p.backlinks) html += '<h3>誰連到這頁 <span class="n">' + p.backlinks.length + '</span></h3><div class="linklist">' +
-    p.backlinks.slice(0, 80).map(c => '<a data-path="' + esc(c.path) + '">' + esc(c.title) + "</a>").join("") + (p.backlinks.length > 80 ? '<div class="note-line">…還有 ' + (p.backlinks.length - 80) + " 頁</div>" : "") + "</div>";
-  html += '<p class="note-line" style="margin-top:24px">點一個連結，會在筆記裡標出它出現的地方；點標題打開那一頁（⌘／Ctrl 開新分頁）。</p>';
+  if (linked.length) html += T('<h3>已連結 <span class="n">') + linked.length + "</span></h3>" + linked.slice(0, 40).map(mentionRow).join("");
+  if (p.backlinks) html += T('<h3>誰連到這頁 <span class="n">') + p.backlinks.length + '</span></h3><div class="linklist">' +
+    p.backlinks.slice(0, 80).map(c => '<a data-path="' + esc(c.path) + '">' + esc(c.title) + "</a>").join("") + (p.backlinks.length > 80 ? T('<div class="note-line">…還有 ') + (p.backlinks.length - 80) + T(" 頁</div>") : "") + "</div>";
+  html += T('<p class="note-line" style="margin-top:24px">點一個連結，會在筆記裡標出它出現的地方；點標題打開那一頁（⌘／Ctrl 開新分頁）。</p>');
   el.innerHTML = html;
   const c = $("#check-now");
   if (c) c.onclick = () => runCheck(p.path);
@@ -1007,7 +1039,7 @@ async function runCheck(path) {
   S.checking.delete(path);
   if (tab() && tab().path === path) {
     await loadPanel(true);
-    if (err) $("#panel").insertAdjacentHTML("afterbegin", '<div class="banner">Jev 沒回應：' + esc(err) + "。先用名稱比對的結果。</div>");
+    if (err) $("#panel").insertAdjacentHTML("afterbegin", T('<div class="banner">Jev 沒回應：') + esc(err) + T("。先用名稱比對的結果。</div>"));
   }
 }
 
@@ -1020,7 +1052,7 @@ $("#panel").addEventListener("click", async e => {
   if (dis) {
     await api("/api/dismiss", { key: dis.dataset.dismiss });
     const card = dis.closest(".card"); card.style.opacity = .45;
-    card.querySelector(".acts").innerHTML = '<span class="muted" style="font-size:12px">已略過，不會再出現。</span> <button data-undo="' + esc(dis.dataset.dismiss) + '">復原</button>';
+    card.querySelector(".acts").innerHTML = T('<span class="muted" style="font-size:12px">已略過，不會再出現。</span> <button data-undo="') + esc(dis.dataset.dismiss) + T('">復原</button>');
     return;
   }
   const undo = e.target.closest("[data-undo]");
@@ -1030,7 +1062,7 @@ $("#panel").addEventListener("click", async e => {
   const m = e.target.closest(".mention");
   if (m) {
     if (e.target.closest(".t")) { openNote(m.dataset.path, { newTab: e.metaKey || e.ctrlKey }); return; }
-    if (tab() && tab().editing) { toast("預覽模式才能標出位置。"); return; }
+    if (tab() && tab().editing) { toast(T("預覽模式才能標出位置。")); return; }
     if (!highlight(JSON.parse(m.dataset.names))) openNote(m.dataset.path, { newTab: e.metaKey || e.ctrlKey });
   }
 });
@@ -1095,22 +1127,22 @@ function renderQuick(keepSel) {
   const wiki = hits.filter(h => h.e.kind === "wiki").slice(0, useJev ? 4 : 7), notes = hits.filter(h => h.e.kind !== "wiki").slice(0, useJev ? 3 : 5);
   const row = h => '<div class="qi" data-path="' + esc(h.e.path) + '"><span class="qt">' + esc(h.e.title) + "</span>" +
     (h.via ? '<span class="via">' + esc(h.via) + "</span>" : "") + '<span class="muted">' +
-    (h.e.kind === "wiki" ? esc(TYPE_ZH[h.e.type] || "") : h.e.kind === "journal" ? "日記" : "筆記") + "</span></div>";
+    (h.e.kind === "wiki" ? esc(TYPE_ZH[h.e.type] || "") : h.e.kind === "journal" ? T("日記") : T("筆記")) + "</span></div>";
   let html = "";
   if (useJev) {
-    html += '<div class="qg">Jev：和「' + esc(raw) + '」相關的頁</div>';
-    if (!jr) html += '<div class="qg"><span class="spin"></span> Jev 判斷中…</div>';
-    else if (jr.error || jr.mode !== "jev") html += '<div class="qg">Jev 沒回應' + (jr.error ? "：" + esc(jr.error) : "") + "，下面是名稱比對。</div>";
+    html += T('<div class="qg">Jev：和「') + esc(raw) + T('」相關的頁</div>');
+    if (!jr) html += T('<div class="qg"><span class="spin"></span> Jev 判斷中…</div>');
+    else if (jr.error || jr.mode !== "jev") html += T('<div class="qg">Jev 沒回應') + (jr.error ? T("：") + esc(jr.error) : "") + T("，下面是名稱比對。</div>");
     else html += jr.results.slice(0, 7).map(x => '<div class="qi" data-path="' + esc(x.path) + '"><span class="qt">' + esc(x.title) + '</span><span class="muted">' +
-      esc(TYPE_ZH[x.type] || "") + (x.bm25 ? " · 關鍵字" : x.score != null ? " · " + x.score.toFixed(2) : "") + "</span></div>").join("");
+      esc(TYPE_ZH[x.type] || "") + (x.bm25 ? T(" · 關鍵字") : x.score != null ? " · " + x.score.toFixed(2) : "") + "</span></div>").join("");
   }
-  if (wiki.length) html += '<div class="qg">' + (useJev ? "名稱相符" : "知識庫") + "</div>" + wiki.map(row).join("");
-  if (notes.length) html += '<div class="qg">筆記</div>' + notes.map(row).join("");
-  if (!hits.length) html += '<div class="qg">標題和別名裡沒有「' + esc(raw) + "」</div>";
-  const aiRow = '<div class="qi ai-row" data-ai="1"><span class="qt">✦ 問 AI：「' + esc(raw) + '」</span><span class="muted">⌘↵</span></div>';
+  if (wiki.length) html += '<div class="qg">' + (useJev ? T("名稱相符") : T("知識庫")) + "</div>" + wiki.map(row).join("");
+  if (notes.length) html += T('<div class="qg">筆記</div>') + notes.map(row).join("");
+  if (!hits.length) html += T('<div class="qg">標題和別名裡沒有「') + esc(raw) + T("」</div>");
+  const aiRow = T('<div class="qi ai-row" data-ai="1"><span class="qt">✦ 問 AI：「') + esc(raw) + T('」</span><span class="muted">⌘↵</span></div>');
   const asking = questionLike(raw);
   if (asking) html = aiRow + html; else html += aiRow;
-  html += '<div class="qi" data-ask="1"><span>↵ ' + (useJev ? "在左欄列出 Jev 的完整結果（前 20 頁）" : jevUsable() ? "用 Jev 找和「" + esc(raw) + "」相關的頁" : "用關鍵字搜尋內容「" + esc(raw) + "」") + "</span></div>";
+  html += '<div class="qi" data-ask="1"><span>↵ ' + (useJev ? T("在左欄列出 Jev 的完整結果（前 20 頁）") : jevUsable() ? T("用 Jev 找和「") + esc(raw) + T("」相關的頁") : T("用關鍵字搜尋內容「") + esc(raw) + T("」")) + "</span></div>";
   quick.innerHTML = html;
   quick.hidden = false;
   const items = [...quick.querySelectorAll(".qi")];
@@ -1165,13 +1197,13 @@ async function ask(q) {
 
 function renderJevState() {
   const el = $("#jev-state");
-  if (!S.tree.jev) { el.className = "jev-state off"; el.textContent = "沒有 Jev 金鑰：只用名稱比對和關鍵字搜尋"; return; }
+  if (!S.tree.jev) { el.className = "jev-state off"; el.textContent = T("沒有 Jev 金鑰：只用名稱比對和關鍵字搜尋"); return; }
   el.className = "jev-state " + (S.jevOn ? "on" : "off");
-  el.innerHTML = '<button id="jev-toggle" title="關掉後：搜尋改用關鍵字，筆記不送 Jev 判斷">Jev：' + (S.jevOn ? "開" : "關") + "</button>" +
-    (S.tree.read_only ? ' <span class="chip">唯讀</span>' : "");
+  el.innerHTML = T('<button id="jev-toggle" title="關掉後：搜尋改用關鍵字，筆記不送 Jev 判斷">Jev：') + (S.jevOn ? T("開") : T("關")) + "</button>" +
+    (S.tree.read_only ? T(' <span class="chip">唯讀</span>') : "");
   $("#jev-toggle").onclick = () => {
     S.jevOn = !S.jevOn; store.set("jev-on", S.jevOn); renderJevState();
-    toast(S.jevOn ? "Jev 開：搜尋用 Jev 判斷，打開筆記時自動判斷連結。" : "Jev 關：搜尋改用關鍵字，筆記內容不再送出。");
+    toast(S.jevOn ? T("Jev 開：搜尋用 Jev 判斷，打開筆記時自動判斷連結。") : T("Jev 關：搜尋改用關鍵字，筆記內容不再送出。"));
     if (panelData && tab() && tab().kind === "note") renderPanel(panelData);
   };
 }
@@ -1266,10 +1298,10 @@ applyLayout();
   try { await refreshTree(); } catch (e) { return; }       // no key or no vault: the start screen is showing
   $("#vault-name").textContent = S.tree.vault;
   const where = S.tree.vault_path.replace(/^\/Users\/[^/]+/, "~");
-  $("#vault-where").textContent = S.tree.protected ? "受保護・唯讀" : S.tree.read_only ? "唯讀" : "在 " + where.split("/").slice(0, -1).join("/") + "/";
+  $("#vault-where").textContent = S.tree.protected ? T("受保護・唯讀") : S.tree.read_only ? T("唯讀") : "";
   $("#vault-where").classList.toggle("prot", !!S.tree.protected);
-  $("#brand").title = "正在使用：" + S.tree.vault_path + (S.tree.protected ? "\n這個筆記庫在 protected.txt 裡：只能看，不能改。" : "") + "\n點一下切換筆記庫";
-  document.title = S.tree.vault + " · 筆記";
+  $("#brand").title = T("正在使用：") + where + (S.tree.protected ? T("\n這個筆記庫在 protected.txt 裡：只能看，不能改。") : "") + T("\n點一下切換筆記庫");
+  document.title = S.tree.vault + " · Lumen";
   renderJevState();
   $("#journal-btn").hidden = $("#new-btn").hidden = !!S.tree.read_only;
   if (!["journal", "raw", "assets", "wiki"].includes(S.sideTab)) S.sideTab = "raw";
@@ -1286,13 +1318,13 @@ applyLayout();
 
 async function newNote(dir) {
   try {
-    const r = await api("/api/new", { dir: dir ?? ROOT() });
+    const r = await api("/api/new", { dir: dir ?? ROOT(), title: T("未命名") });
     await refreshTree();
     if (dir && S.sideTab === "raw") { S.open.add(dir); store.set("open-folders", [...S.open]); renderTree(); }
     await openNote(r.path, { edit: true, newTab: true });
     const t = S.tabs.find(x => x.path === r.path);
     if (t) { t.renameNow = true; renderView(); }
-  } catch (e) { toast("沒辦法新增：" + e.message); }
+  } catch (e) { toast(T("沒辦法新增：") + e.message); }
 }
 $("#new-btn").onclick = () => newNote();
 
@@ -1302,7 +1334,7 @@ function startTitleRename(t) {
   if (!h || !t.note) return;
   const old = h.textContent;
   const inp = document.createElement("input");
-  inp.className = "title-input"; inp.value = old; inp.setAttribute("aria-label", "筆記名稱");
+  inp.className = "title-input"; inp.value = old; inp.setAttribute("aria-label", T("筆記名稱"));
   h.replaceWith(inp); inp.focus(); inp.select();
   let done = false;
   const finish = async ok => {
@@ -1330,14 +1362,14 @@ async function renameJob(path, name) {
   const isNote = /\.md$/.test(path), file = path.split("/").pop();
   const oldName = isNote ? baseName(path) : file;
   if (name == null) {
-    const ok = await dialog("改名", '<input id="rename-input" class="dialog-input" value="' + esc(oldName) + '">' +
-      "<p>" + (isNote ? "筆記裡連到它的 <code>[[連結]]</code> 會一起更新。" : "筆記裡連到這個附件的地方會一起更新。") + "</p>", "改名");
+    const ok = await dialog(T("改名"), '<input id="rename-input" class="dialog-input" value="' + esc(oldName) + '">' +
+      "<p>" + (isNote ? T("筆記裡連到它的 <code>[[連結]]</code> 會一起更新。") : T("筆記裡連到這個附件的地方會一起更新。")) + "</p>", T("改名"));
     name = $("#rename-input").value.trim();
     if (!ok || !name || name === oldName) return;
   }
   const t0 = S.tabs.find(x => x.path === path);
   if (t0 && t0.dirty) {                          // unsaved edits are saved first, so nothing is lost
-    if (t0 !== tab()) { toast("「" + t0.title + "」還有沒儲存的修改，先存再改名。"); return; }
+    if (t0 !== tab()) { toast(T("「") + t0.title + T("」還有沒儲存的修改，先存再改名。")); return; }
     await saveTab(t0);
     if (t0.dirty) return;                        // the save failed; its message is on the note
   }
@@ -1352,11 +1384,11 @@ async function renameJob(path, name) {
     await refreshTree(); assetsData = null;
     renderTabbar(); renderView();
     const newName = isNote ? baseName(r.path) : r.path.split("/").pop();
-    let msg = "改名為「" + newName + "」";
-    if (r.relinked.length) msg += "，更新了 " + r.relinked.length + " 篇筆記裡的連結";
-    if (r.warnings.includes("processed")) msg += "。這篇已整理過，知識庫的來源頁要等 AI 下次整理時更新路徑";
-    toast(msg + "。", { label: "復原", fn: () => renameFile(r.path, oldName) });
-  } catch (e) { toast("沒改成：" + e.message); renderView(); }
+    let msg = T("改名為「") + newName + T("」");
+    if (r.relinked.length) msg += T("，更新了 ") + r.relinked.length + T(" 篇筆記裡的連結");
+    if (r.warnings.includes("processed")) msg += T("。這篇已整理過，知識庫的來源頁要等 AI 下次整理時更新路徑");
+    toast(msg + T("。"), { label: T("復原"), fn: () => renameFile(r.path, oldName) });
+  } catch (e) { toast(T("沒改成：") + e.message); renderView(); }
 }
 
 // line diff for the version view: common head and tail, then LCS on what's left (bounded)
@@ -1383,7 +1415,7 @@ function lineDiff(a, b) {
 function diffHtml(cur, ver) {
   const d = lineDiff(cur, ver), keep = new Set();
   d.forEach((x, i) => { if (x[0] !== " ") for (let k = i - 2; k <= i + 2; k++) keep.add(k); });
-  if (!keep.size) return '<p class="muted">和現在的內容一樣。</p>';
+  if (!keep.size) return T('<p class="muted">和現在的內容一樣。</p>');
   let html = "", gap = false;
   d.forEach((x, i) => {
     if (!keep.has(i)) { if (!gap) { html += '<div class="d-gap">⋯</div>'; gap = true; } return; }
@@ -1398,17 +1430,17 @@ async function showHistory(path) {
   try { r = await api("/api/history?path=" + encodeURIComponent(path)); } catch (e) { toast(e.message); return; }
   const name = baseName(path);
   if (!r.versions.length) {
-    await dialog("「" + name + "」的版本", "<p>還沒有較早的版本。從現在起，每次儲存改動前，Lumen 會先留下前一版（連續寫作時每 10 分鐘最多留一版，每篇最多 100 版），存在筆記庫的隱藏資料夾 <code>.lumen/history/</code>。</p>", "好");
+    await dialog(T("「") + name + T("」的版本"), T("<p>還沒有較早的版本。從現在起，每次儲存改動前，Lumen 會先留下前一版（連續寫作時每 10 分鐘最多留一版，每篇最多 100 版），存在筆記庫的隱藏資料夾 <code>.lumen/history/</code>。</p>"), T("好"));
     return;
   }
   let cur = "";
   try { cur = (await api("/api/note?path=" + encodeURIComponent(path))).text; } catch (e) {}
   const html = '<div class="hist"><div class="hist-list">' + r.versions.map(v => '<button data-v="' + esc(v.id) + '">' + esc(v.time) + "<span>" + fmtSize(v.size) + "</span></button>").join("") +
-    '</div><div class="hist-view" id="hist-view"><p class="muted">選左邊一個版本，看它和現在差在哪。</p></div></div>' +
-    '<p class="d-legend"><span class="d-del">現在有、還原後會拿掉</span> <span class="d-add">這個版本有、還原後會回來</span>　還原前，現在的內容會先留成一版，所以還原也能復原。</p>';
+    T('</div><div class="hist-view" id="hist-view"><p class="muted">選左邊一個版本，看它和現在差在哪。</p></div></div>') +
+    T('<p class="d-legend"><span class="d-del">現在有、還原後會拿掉</span> <span class="d-add">這個版本有、還原後會回來</span>　還原前，現在的內容會先留成一版，所以還原也能復原。</p>');
   $("#modal .modal").classList.add("wide");
   let sel = null;
-  const p = dialog("「" + name + "」的版本", html, "還原這個版本");
+  const p = dialog(T("「") + name + T("」的版本"), html, T("還原這個版本"));
   const okb = $("#modal-ok"); okb.disabled = true;
   $("#modal-body .hist-list").onclick = async e => {
     const b = e.target.closest("[data-v]"); if (!b) return;
@@ -1423,20 +1455,20 @@ async function showHistory(path) {
   $("#modal .modal").classList.remove("wide"); okb.disabled = false;
   if (!ok || !sel) return;
   const t = S.tabs.find(x => x.path === path);
-  if (t && t.dirty && !(await dialog("放棄還沒儲存的修改？", "<p>這篇還有沒儲存的修改，還原會蓋掉它們。</p>", "還原", true))) return;
+  if (t && t.dirty && !(await dialog(T("放棄還沒儲存的修改？"), T("<p>這篇還有沒儲存的修改，還原會蓋掉它們。</p>"), T("還原"), true))) return;
   try {
     await api("/api/history/restore", { path, id: sel });
     if (t) { t.editing = false; await reloadTab(t); }
-    toast("還原了 " + r.versions.find(v => v.id === sel).time + " 的版本。", { label: "復原", fn: () => showHistory(path) });
-  } catch (e) { toast("沒還原：" + e.message); }
+    toast(T("還原了 ") + r.versions.find(v => v.id === sel).time + T(" 的版本。"), { label: T("復原"), fn: () => showHistory(path) });
+  } catch (e) { toast(T("沒還原：") + e.message); }
 }
 
 async function showAgentDiff(id, path) {
   let r;
   try { r = await api("/api/agent/diff?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path)); } catch (e) { toast(e.message); return; }
   $("#modal .modal").classList.add("wide");
-  await dialog("「" + baseName(path) + "」這次的修改", '<div class="hist-view">' + (r.old ? diffHtml(r.old, r.new) : '<div class="d-add">' + esc(r.new).replace(/\n/g, "<br>") + "</div>") + "</div>" +
-    '<p class="d-legend"><span class="d-add">這次加的</span> <span class="d-del">這次拿掉的</span></p>', "好");
+  await dialog(T("「") + baseName(path) + T("」這次的修改"), '<div class="hist-view">' + (r.old ? diffHtml(r.old, r.new) : '<div class="d-add">' + esc(r.new).replace(/\n/g, "<br>") + "</div>") + "</div>" +
+    T('<p class="d-legend"><span class="d-add">這次加的</span> <span class="d-del">這次拿掉的</span></p>'), T("好"));
   $("#modal .modal").classList.remove("wide");
 }
 
@@ -1448,8 +1480,8 @@ let startState = null;
 async function showStart(mode) {
   const el = $("#start");
   if (mode === "nokey") {
-    el.innerHTML = '<div class="start-card"><h1>Lumen</h1><p>這個頁面要從 Lumen 的<strong>啟動連結</strong>打開。</p>' +
-      '<p class="muted">啟動 Lumen 時，終端機會印出一個帶存取碼的網址（<code>http://127.0.0.1:…/?k=…</code>）。用那個網址打開一次，這個瀏覽器之後就記得了。存取碼讓別的網站沒辦法透過瀏覽器讀你的筆記。</p></div>';
+    el.innerHTML = T('<div class="start-card"><h1>Lumen</h1><p>這個頁面要從 Lumen 的<strong>啟動連結</strong>打開。</p>') +
+      T('<p class="muted">啟動 Lumen 時，終端機會印出一個帶存取碼的網址（<code>http://127.0.0.1:…/?k=…</code>）。用那個網址打開一次，這個瀏覽器之後就記得了。存取碼讓別的網站沒辦法透過瀏覽器讀你的筆記。</p></div>');
     el.hidden = false; return;
   }
   let v;
@@ -1464,13 +1496,13 @@ function renderStart() {
   const { v, mode } = startState, el = $("#start");
   const rows = v.vaults.map(x => '<div class="vault-row' + (x.path === v.current ? " current" : "") + '">' +
     '<button class="vault-open" data-open-vault="' + esc(x.path) + '"' + (x.exists ? "" : " disabled") + '><strong>' + esc(x.name) + "</strong><span>" + esc(tilde(x.path)) + "</span></button>" +
-    (x.path === v.current ? '<span class="chip">正在用</span>' : "") + (x.protected ? '<span class="chip warn">受保護・唯讀</span>' : "") + (x.exists ? "" : '<span class="chip warn">找不到資料夾</span>') +
-    '<button class="ghost" data-forget="' + esc(x.path) + '" title="從清單拿掉（資料夾本身不動）">×</button></div>').join("");
-  el.innerHTML = '<div class="start-card">' + (v.current ? '<button class="start-close" data-s="close" title="回到筆記">×</button>' : "") +
-    "<h1>" + (v.current ? "切換筆記庫" : "歡迎使用 Lumen") + "</h1>" +
-    '<p class="muted">筆記庫就是一個資料夾。任何放 Markdown 筆記的資料夾都可以，包括 Obsidian 的 vault。你的筆記不會被 AI 改動；AI 整理出來的頁面放在資料夾裡的 <code>wiki/</code>。</p>' +
-    (rows ? '<div class="group">最近用過</div><div class="vault-list">' + rows + "</div>" : "") +
-    '<div class="start-acts"><button data-s="create" class="' + (mode === "create" ? "primary" : "") + '">＋ 建立新的筆記庫</button><button data-s="open" class="' + (mode === "open" ? "primary" : "") + '">打開一個資料夾…</button></div>' +
+    (x.path === v.current ? T('<span class="chip">正在用</span>') : "") + (x.protected ? T('<span class="chip warn">受保護・唯讀</span>') : "") + (x.exists ? "" : T('<span class="chip warn">找不到資料夾</span>')) +
+    '<button class="ghost" data-forget="' + esc(x.path) + T('" title="從清單拿掉（資料夾本身不動）">×</button></div>')).join("");
+  el.innerHTML = '<div class="start-card">' + (v.current ? T('<button class="start-close" data-s="close" title="回到筆記">×</button>') : "") +
+    "<h1>" + (v.current ? T("切換筆記庫") : T("歡迎使用 Lumen")) + "</h1>" +
+    T('<p class="muted">筆記庫就是一個資料夾。任何放 Markdown 筆記的資料夾都可以，包括 Obsidian 的 vault。你的筆記不會被 AI 改動；AI 整理出來的頁面放在資料夾裡的 <code>wiki/</code>。</p>') +
+    (rows ? T('<div class="group">最近用過</div><div class="vault-list">') + rows + "</div>" : "") +
+    '<div class="start-acts"><button data-s="create" class="' + (mode === "create" ? "primary" : "") + T('">＋ 建立新的筆記庫</button><button data-s="open" class="') + (mode === "open" ? "primary" : "") + T('">打開一個資料夾…</button></div>') +
     '<div id="start-pane"></div></div>';
 }
 
@@ -1480,20 +1512,20 @@ async function browse(path) {
   startState.path = b.path;
   const create = startState.mode === "create";
   const pane = $("#start-pane");
-  pane.innerHTML = '<div class="browser"><div class="places">' + b.places.map(p => '<button data-browse="' + esc(p.path) + '" class="' + (p.path === b.path ? "on" : "") + '">' + esc(p.name) + "</button>").join("") + "</div>" +
-    '<div class="crumbs">' + (b.parent ? '<button data-browse="' + esc(b.parent) + '" title="上一層">↑</button>' : "") + '<span>' + esc(tilde(b.path)) + "</span>" + (b.vault ? '<span class="chip">筆記庫</span>' : "") + "</div>" +
-    '<div class="folders">' + (b.folders.length ? b.folders.map(f => '<button data-browse="' + esc(f.path) + '"><span>📁 ' + esc(f.name) + "</span>" + (f.vault ? '<span class="chip">筆記庫</span>' : "") + "</button>").join("") : '<p class="muted">（沒有子資料夾）</p>') + "</div>" +
+  pane.innerHTML = '<div class="browser"><div class="places">' + b.places.map(p => '<button data-browse="' + esc(p.path) + '" class="' + (p.path === b.path ? "on" : "") + '">' + esc(TS(p.name)) + "</button>").join("") + "</div>" +
+    '<div class="crumbs">' + (b.parent ? '<button data-browse="' + esc(b.parent) + T('" title="上一層">↑</button>') : "") + '<span>' + esc(tilde(b.path)) + "</span>" + (b.vault ? T('<span class="chip">筆記庫</span>') : "") + "</div>" +
+    '<div class="folders">' + (b.folders.length ? b.folders.map(f => '<button data-browse="' + esc(f.path) + '"><span>📁 ' + esc(f.name) + "</span>" + (f.vault ? T('<span class="chip">筆記庫</span>') : "") + "</button>").join("") : T('<p class="muted">（沒有子資料夾）</p>')) + "</div>" +
     '<div class="browse-acts">' + (create
-      ? '<label>名字 <input id="new-vault-name" class="dialog-input" placeholder="例如：我的筆記"></label><button class="primary" data-s="do-create">在「' + esc(b.name) + '」裡建立</button>'
-      : b.root ? '<span class="muted small">選一個放筆記的資料夾（不能是整個家目錄）</span>'
-        : '<button class="primary" data-s="do-open">打開「' + esc(b.name) + "」</button>") + "</div></div>" +
-    '<p class="muted small">' + (create ? "會建立一個新資料夾，裡面有 <code>journal/</code>（日記）、<code>assets/</code>（附件）、<code>wiki/</code>（AI 的頁面）和 Obsidian 的設定，用 Obsidian 也能打開。"
-      : "打開既有的資料夾不會改動裡面的檔案。除了 AI 用的 <code>wiki/</code>，資料夾裡的 Markdown 都算你的筆記。") + "</p>";
+      ? T('<label>名字 <input id="new-vault-name" class="dialog-input" placeholder="例如：我的筆記"></label><button class="primary" data-s="do-create">在「') + esc(b.name) + T('」裡建立</button>')
+      : b.root ? T('<span class="muted small">選一個放筆記的資料夾（不能是整個家目錄）</span>')
+        : T('<button class="primary" data-s="do-open">打開「') + esc(b.name) + T("」</button>")) + "</div></div>" +
+    '<p class="muted small">' + (create ? T("會建立一個新資料夾，裡面有 <code>journal/</code>（日記）、<code>Attachments/</code>（附件）、<code>wiki/</code>（AI 的頁面）和 Obsidian 的設定，用 Obsidian 也能打開。")
+      : T("打開既有的資料夾不會改動裡面的檔案。除了 AI 用的 <code>wiki/</code>，資料夾裡的 Markdown 都算你的筆記。")) + "</p>";
   if (create) $("#new-vault-name").focus();
 }
 
 async function switchVault(action, body) {
-  if (S.tabs.some(t => t.dirty) && !(await dialog("還有沒儲存的修改", "<p>切換筆記庫會關掉所有分頁，沒儲存的修改會不見。</p>", "切換", true))) return;
+  if (S.tabs.some(t => t.dirty) && !(await dialog(T("還有沒儲存的修改"), T("<p>切換筆記庫會關掉所有分頁，沒儲存的修改會不見。</p>"), T("切換"), true))) return;
   try {
     await api(action, body);
     S.tabs.forEach(t => (t.dirty = false));
@@ -1526,11 +1558,13 @@ $("#brand").addEventListener("click", async e => {
   let v;
   try { v = await api("/api/vaults"); } catch (err) { return; }
   const r = $("#brand").getBoundingClientRect();
-  const items = v.vaults.filter(x => x.exists).slice(0, 8).map(x => ({ label: (x.path === v.current ? "✓ " : "　 ") + x.name, fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
-  items.push(null, { label: "打開其他資料夾…", fn: () => showStart("open") }, { label: "建立新的筆記庫…", fn: () => showStart("create") },
-    { label: "管理清單…", fn: () => showStart() }, null, { label: "✦ 連接 AI…", fn: () => showConnect() },
-    { label: "✦ 請 AI 檢查知識庫…", fn: () => startAgent("lint", {}) },
-    { label: "在 Finder 中顯示", fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) });
+  const items = v.vaults.filter(x => x.exists).slice(0, 8).map(x => ({ label: (x.path === v.current ? "✓ " : T("　 ")) + x.name, fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
+  items.push(null, { label: T("打開其他資料夾…"), fn: () => showStart("open") }, { label: T("建立新的筆記庫…"), fn: () => showStart("create") },
+    { label: T("管理清單…"), fn: () => showStart() }, null, { label: T("✦ 連接 AI…"), fn: () => showConnect() },
+    { label: T("✦ 請 AI 檢查知識庫…"), fn: () => startAgent("lint", {}) },
+    { label: T("在 Finder 中顯示"), fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) },
+    null, ...Object.entries(LANGS).map(([k, name]) => ({ label: (k === LANG && chosenLang() ? "✓ " : T("　 ")) + name, fn: () => k !== LANG && setLang(k) })),
+    { label: (chosenLang() ? T("　 ") : "✓ ") + T("語言") + T("：") + T("跟隨系統"), fn: () => chosenLang() && setLang("") });
   showMenu(r.left, r.bottom + 4, items);
 });
 
@@ -1541,8 +1575,8 @@ $("#brand").addEventListener("click", async e => {
 // Claude Code, with no tools, writes the answer with [[page]] citations.
 
 const AI = { turns: [], ctx: undefined };       // ctx undefined: follow the open note; null: none
-const CLAUDE_MODELS = [["auto", "Claude：自動（Jev 選）"], ["haiku", "Claude Haiku：快、省"], ["sonnet", "Claude Sonnet：一般"], ["opus", "Claude Opus：最強、最耗額度"]];
-const GPT_TIER = { fast: "快、省", balanced: "一般", strong: "最強、最耗額度" };
+const CLAUDE_MODELS = [["auto", T("Claude：自動（Jev 選）")], ["haiku", T("Claude Haiku：快、省")], ["sonnet", T("Claude Sonnet：一般")], ["opus", T("Claude Opus：最強、最耗額度")]];
+const GPT_TIER = { fast: T("快、省"), balanced: T("一般"), strong: T("最強、最耗額度") };
 let GPT_MODELS = [];          // the models the user's ChatGPT plan offers, from its catalogue (costs no usage)
 const isGpt = m => String(m || "").startsWith("chatgpt");
 const CONN = { known: false, claude: false, chatgpt: false };   // which AIs are connected: the menu offers only those
@@ -1552,9 +1586,9 @@ function setConn(st) {
   if (was !== CONN.known + "," + CONN.claude + "," + CONN.chatgpt && $("#ai-model")) renderAI();
 }
 function aiModels() {
-  const gpt = [["chatgpt", "ChatGPT：自動（Jev 選）"]].concat(GPT_MODELS.map(m =>
-    ["chatgpt:" + m.slug, "ChatGPT " + m.name + "：" + GPT_TIER[m.tier] + (m.legacy ? "（舊版）" : "")]));
-  if (CONN.known && !CONN.claude && !CONN.chatgpt) return [[aiModel(), "還沒連接 AI"]];
+  const gpt = [["chatgpt", T("ChatGPT：自動（Jev 選）")]].concat(GPT_MODELS.map(m =>
+    ["chatgpt:" + m.slug, "ChatGPT " + m.name + T("：") + GPT_TIER[m.tier] + (m.legacy ? T("（舊版）") : "")]));
+  if (CONN.known && !CONN.claude && !CONN.chatgpt) return [[aiModel(), T("還沒連接 AI")]];
   const all = (!CONN.known || CONN.claude ? CLAUDE_MODELS : []).concat(!CONN.known || CONN.chatgpt ? gpt : []);
   if (!all.some(([v]) => v === aiModel()) && isGpt(aiModel()) && CONN.chatgpt) all.push([aiModel(), "ChatGPT " + aiModel().slice(8)]);
   return all;
@@ -1563,8 +1597,8 @@ async function loadGptModels() {
   try { GPT_MODELS = (await api("/api/connect/chatgpt/models")).list || []; } catch (e) { GPT_MODELS = []; }
   if ($("#ai-model")) renderAI();
 }
-const AI_EFFORTS = [["auto", "思考：自動"], ["low", "思考：少"], ["medium", "思考：一般"], ["high", "思考：仔細"]];
-const EFFORT_NAME = { low: "想得少", medium: "一般", high: "想得仔細" };
+const AI_EFFORTS = [["auto", T("思考：自動")], ["low", T("思考：少")], ["medium", T("思考：一般")], ["high", T("思考：仔細")]];
+const EFFORT_NAME = { low: T("想得少"), medium: T("一般"), high: T("想得仔細") };
 function pref(k) { try { return localStorage.getItem("lumen." + k) || localStorage.getItem("notesapp." + k) || "auto"; } catch (e) { return "auto"; } }
 function setPref(k, v) { try { localStorage.setItem("lumen." + k, v); } catch (e) {} }
 const aiModel = () => pref("aiModel"), aiEffort = () => pref("aiEffort");
@@ -1635,13 +1669,13 @@ async function askAI(q) {
 // ------------------------------------------------------------ the wiki agent (plan → your OK → act → undo)
 const AGENT_STEPS = 6;
 async function startAgent(task, extra) {
-  if (S.tree.read_only) return toast("這個筆記庫只能看，不能改。");
+  if (S.tree.read_only) return toast(T("這個筆記庫只能看，不能改。"));
   showRight("ai");
   const m = aiModel(), e = aiEffort(), gpt = isGpt(m);
   const turn = { kind: "agent", task, status: "starting", steps: [] };
   AI.turns.push(turn); renderAI();
   const body = Object.assign({ task, provider: gpt ? "chatgpt" : "claude", model: gpt ? m : m === "auto" ? null : m,
-    effort: e === "auto" ? null : e, jev: !!jevUsable(), ui_lang: navigator.language }, extra);
+    effort: e === "auto" ? null : e, jev: !!jevUsable(), ui_lang: LANG }, extra);
   try { const r = await api("/api/agent/start", body); turn.id = r.id; }
   catch (err) {
     turn.status = "error"; turn.error = err.message; renderAI();
@@ -1664,85 +1698,85 @@ async function pollAgent(turn) {
   renderAI();
   if (turn.status === "done") { await refreshTree(); }
 }
-const KIND = { created: "新", changed: "改", deleted: "刪" };
+const KIND = { created: T("新"), changed: T("改"), deleted: T("刪") };
 function stepsHtml(t, phase) {
   const st = t.steps.filter(x => x.phase === phase);
   if (!st.length) return "";
-  const secs = x => x.secs >= 1 ? '<span class="muted"> · ' + (x.secs >= 90 ? Math.round(x.secs / 60) + " 分" : Math.round(x.secs) + " 秒") + "</span>" : "";
-  const row = x => '<div class="ag-step' + (x.ok === false ? " bad" : "") + '">' + (x.ok === false ? "✗ " : x.ok ? "· " : "… ") + esc(x.what) + secs(x) + "</div>";
+  const secs = x => x.secs >= 1 ? '<span class="muted"> · ' + (x.secs >= 90 ? Math.round(x.secs / 60) + T(" 分") : Math.round(x.secs) + T(" 秒")) + "</span>" : "";
+  const row = x => '<div class="ag-step' + (x.ok === false ? " bad" : "") + '">' + (x.ok === false ? "✗ " : x.ok ? "· " : "… ") + esc(TS(x.what)) + secs(x) + "</div>";
   const live = (phase === "plan" ? t.status === "planning" : t.status === "acting");
   if (live) return '<div class="ag-steps">' + st.slice(-AGENT_STEPS).map(row).join("") + "</div>";
-  return '<details class="ag-steps"><summary>' + (phase === "plan" ? "讀了、查了 " : "做了 ") + st.length + " 步</summary>" + st.map(row).join("") + "</details>";
+  return '<details class="ag-steps"><summary>' + (phase === "plan" ? T("讀了、查了 ") : T("做了 ")) + st.length + T(" 步</summary>") + st.map(row).join("") + "</details>";
 }
 function planHtml(plan) {
-  if (!plan) return '<div class="banner">AI 沒有給出計畫格式；看上面的說明決定要不要繼續。</div>';
+  if (!plan) return T('<div class="banner">AI 沒有給出計畫格式；看上面的說明決定要不要繼續。</div>');
   const li = xs => xs.map(x => "<li>" + x + "</li>").join("");
   let h = '<div class="ag-plan"><div class="ag-sum">' + esc(plan.summary || "") + "</div>";
-  if ((plan.takeaways || []).length) h += "<h4>重點</h4><ul>" + li(plan.takeaways.map(esc)) + "</ul>";
-  if ((plan.create || []).length) h += "<h4>新增 " + plan.create.length + " 頁</h4><ul>" + li(plan.create.map(x => md("[[" + x.page + "]]").replace(/^<p>|<\/p>$/g, "") + ' <span class="muted">' + esc(x.type || "") + "</span><div class=\"muted\">" + esc(x.why || "") + "</div>")) + "</ul>";
-  if ((plan.update || []).length) h += "<h4>更新 " + plan.update.length + " 頁</h4><ul>" + li(plan.update.map(x => md("[[" + x.page + "]]").replace(/^<p>|<\/p>$/g, "") + '<div class="muted">' + esc(x.why || "") + "</div>")) + "</ul>";
-  if (plan.notes) h += '<h4>其他</h4><p class="muted">' + esc(plan.notes) + "</p>";
+  if ((plan.takeaways || []).length) h += T("<h4>重點</h4><ul>") + li(plan.takeaways.map(esc)) + "</ul>";
+  if ((plan.create || []).length) h += T("<h4>新增 ") + plan.create.length + T(" 頁</h4><ul>") + li(plan.create.map(x => md("[[" + x.page + "]]").replace(/^<p>|<\/p>$/g, "") + ' <span class="muted">' + esc(x.type || "") + "</span><div class=\"muted\">" + esc(x.why || "") + "</div>")) + "</ul>";
+  if ((plan.update || []).length) h += T("<h4>更新 ") + plan.update.length + T(" 頁</h4><ul>") + li(plan.update.map(x => md("[[" + x.page + "]]").replace(/^<p>|<\/p>$/g, "") + '<div class="muted">' + esc(x.why || "") + "</div>")) + "</ul>";
+  if (plan.notes) h += T('<h4>其他</h4><p class="muted">') + esc(plan.notes) + "</p>";
   return h + "</div>";
 }
 function agentHtml(t) {
-  const name = { ingest: "整理筆記", analysis: "存成分析頁", lint: "檢查知識庫" }[t.task] || "工作";
-  let h = '<div class="ai-turn ag"><div class="ai-q">✦ ' + esc(t.label || name) + "</div>";
-  if (t.model) h += '<div class="ai-ctxline">' + esc(cap(t.model)) + "，" + esc(EFFORT_NAME[t.effort] || t.effort) + (t.jev ? " · Jev 開" : " · Jev 關") + "</div>";
+  const name = { ingest: T("整理筆記"), analysis: T("存成分析頁"), lint: T("檢查知識庫") }[t.task] || T("工作");
+  let h = '<div class="ai-turn ag"><div class="ai-q">✦ ' + esc(TS(t.label) || name) + "</div>";
+  if (t.model) h += '<div class="ai-ctxline">' + esc(cap(t.model)) + T("，") + esc(EFFORT_NAME[t.effort] || t.effort) + (t.jev ? T(" · Jev 開") : T(" · Jev 關")) + "</div>";
   h += '<div class="ai-a">';
-  if (t.status === "starting") h += '<div class="muted"><span class="spin"></span> 準備…</div>';
-  if (t.status === "planning") h += '<div class="muted"><span class="spin"></span> 讀筆記、找相關的頁，擬計畫（還不會改任何東西）…</div>';
+  if (t.status === "starting") h += T('<div class="muted"><span class="spin"></span> 準備…</div>');
+  if (t.status === "planning") h += T('<div class="muted"><span class="spin"></span> 讀筆記、找相關的頁，擬計畫（還不會改任何東西）…</div>');
   h += stepsHtml(t, "plan");
   if (t.message) h += md(t.message);
   if (t.plan !== undefined && t.status !== "planning" && t.status !== "starting" && t.task && (t.message || t.plan)) h += planHtml(t.plan);
-  if (t.status === "waiting") h += '<textarea class="ag-note" rows="2" placeholder="想改計畫的話寫在這裡（可不填），例如：不要建立 X 頁"></textarea>' +
-    '<div class="ai-acts"><button class="primary" data-ag-go="' + esc(t.id) + '">照這樣做</button><button data-ag-cancel="' + esc(t.id) + '">不要做</button></div>' +
-    '<p class="muted small">只會改知識庫（wiki/）；你的筆記不會被改。做完會列出每一頁的修改，可以全部復原。</p>';
-  if (t.status === "acting") h += '<div class="muted"><span class="spin"></span> 動手中：寫來源頁、更新相關的頁…</div>';
+  if (t.status === "waiting") h += T('<textarea class="ag-note" rows="2" placeholder="想改計畫的話寫在這裡（可不填），例如：不要建立 X 頁；整篇讀"></textarea>') +
+    '<div class="ai-acts"><button class="primary" data-ag-go="' + esc(t.id) + T('">照這樣做</button><button data-ag-cancel="') + esc(t.id) + T('">不要做</button></div>') +
+    T('<p class="muted small">只會改知識庫（wiki/）；你的筆記不會被改。做完會列出每一頁的修改，可以全部復原。</p>');
+  if (t.status === "acting") h += T('<div class="muted"><span class="spin"></span> 動手中：寫來源頁、更新相關的頁…</div>');
   h += stepsHtml(t, "act");
   if (t.status === "acting" && t.live) h += '<div class="muted small">' + esc(t.live.slice(-200)) + "</div>";
   if (t.status === "done" || ((t.status === "stopped" || t.status === "error") && (t.changes || []).length)) {
     if (t.report && t.status === "done") h += md(t.report);
     const ch = t.changes || [];
-    h += '<div class="ag-changes"><h4>' + (ch.length ? "改了 " + ch.length + " 個檔案" : "沒有改任何檔案") + (t.undone ? "（已全部復原）" : "") + "</h4>" +
+    h += '<div class="ag-changes"><h4>' + (ch.length ? T("改了 ") + ch.length + T(" 個檔案") : T("沒有改任何檔案")) + (t.undone ? T("（已全部復原）") : "") + "</h4>" +
       ch.map(c => '<div class="ag-ch"><span class="ag-k ' + c.kind + '">' + KIND[c.kind] + "</span>" + '<a class="wl" data-path="' + esc(c.path) + '">' + esc(c.path.replace(/^wiki\//, "").replace(/\.md$/, "")) + "</a>" +
-        '<button class="ghost" data-ag-diff="' + esc(c.path) + '" data-ag-id="' + esc(t.id) + '">差異</button></div>').join("") + "</div>";
-    if ((t.outside || []).length) h += '<div class="banner">注意：這段時間知識庫以外也有檔案變了（可能是你自己改的）：' + t.outside.slice(0, 5).map(esc).join("、") + "</div>";
-    if (ch.length && !t.undone) h += '<div class="ai-acts"><button data-ag-undo="' + esc(t.id) + '">全部復原</button></div>';
+        '<button class="ghost" data-ag-diff="' + esc(c.path) + '" data-ag-id="' + esc(t.id) + T('">差異</button></div>')).join("") + "</div>";
+    if ((t.outside || []).length) h += T('<div class="banner">注意：這段時間知識庫以外也有檔案變了（可能是你自己改的）：') + t.outside.slice(0, 5).map(esc).join(T("、")) + "</div>";
+    if (ch.length && !t.undone) h += '<div class="ai-acts"><button data-ag-undo="' + esc(t.id) + T('">全部復原</button></div>');
   }
   if (t.status === "done" && t.part && t.part.next && !t.undone)
-    h += '<p class="muted small">這篇很長，一次整理一部分（第 ' + (t.part.i + 1) + " 部分，共 " + t.part.n + "），每部分的重點抓得比整篇一次完整。</p>" +
-      '<div class="ai-acts"><button class="primary" data-ag-next="' + esc(t.part.path) + '" data-ag-part="' + t.part.next.i + '">整理下一部分：' + esc(t.part.next.name) + "</button></div>";
-  else if (t.status === "done" && t.part && !t.part.next) h += '<p class="muted small">這篇的 ' + t.part.n + " 個部分都整理過了。</p>";
-  if (t.status === "error") h += '<div class="banner">沒有完成：' + esc(t.error || "") + (/log ?in|login|auth|登入/i.test(t.error || "") ? "。在終端機打 <code>claude</code> 登入後再試。" : "") + "</div>";
-  if (t.status === "stopped") h += '<div class="ai-meta">已停止。' + ((t.changes || []).length ? "" : "") + "</div>";
-  if (t.status === "cancelled") h += '<div class="ai-meta">沒有執行。</div>';
-  if (["planning", "acting"].includes(t.status)) h += '<div class="ai-acts"><button data-ag-stop="' + esc(t.id) + '">停止</button></div>';
-  if (t.cost && !["planning", "acting", "starting"].includes(t.status)) h += '<div class="ai-meta">約 $' + t.cost.toFixed(2) + "（以 API 價格換算；實際用的是你的訂閱額度）" + (t.seconds ? " · " + Math.round(t.seconds) + " 秒" : "") + "</div>";
+    h += T('<p class="muted small">這篇很長，一次整理一部分（第 ') + (t.part.i + 1) + T(" 部分，共 ") + t.part.n + T("），每部分的重點抓得比整篇一次完整。</p>") +
+      '<div class="ai-acts"><button class="primary" data-ag-next="' + esc(t.part.path) + '" data-ag-part="' + t.part.next.i + T('">整理下一部分：') + esc(t.part.next.name) + "</button></div>";
+  else if (t.status === "done" && t.part && !t.part.next) h += T('<p class="muted small">這篇的 ') + t.part.n + T(" 個部分都整理過了。</p>");
+  if (t.status === "error") h += T('<div class="banner">沒有完成：') + esc(TS(t.error || "")) + (/log ?in|login|auth|登入/i.test(t.error || "") ? T("。在終端機打 <code>claude</code> 登入後再試。") : "") + "</div>";
+  if (t.status === "stopped") h += T('<div class="ai-meta">已停止。') + ((t.changes || []).length ? "" : "") + "</div>";
+  if (t.status === "cancelled") h += T('<div class="ai-meta">沒有執行。</div>');
+  if (["planning", "acting"].includes(t.status)) h += '<div class="ai-acts"><button data-ag-stop="' + esc(t.id) + T('">停止</button></div>');
+  if (t.cost && !["planning", "acting", "starting"].includes(t.status)) h += T('<div class="ai-meta">約 $') + t.cost.toFixed(2) + T("（以 API 價格換算；實際用的是你的訂閱額度）") + (t.seconds ? " · " + Math.round(t.seconds) + T(" 秒") : "") + "</div>";
   return h + "</div></div>";
 }
 
 function turnHtml(t) {
   if (t.kind === "agent") return agentHtml(t);
   let h = '<div class="ai-turn"><div class="ai-q">' + esc(t.q) + "</div>";
-  if (t.ctx) h += '<div class="ai-ctxline">背景：' + esc(t.ctx.title) + (t.ctx.private ? "（日記，不送出）" : "") + "</div>";
-  if (t.status === "finding") return h + '<div class="ai-a muted"><span class="spin"></span> 找相關的頁…</div></div>';
-  if (t.status === "asking") return h + '<div class="ai-a muted"><span class="spin"></span> 交給 Claude…</div></div>';
-  if (t.status === "writing" && !t.text) h += '<div class="ai-a muted"><span class="spin"></span> ' + (!t.model ? (t.choice === "auto" ? "Jev 選模型…" : "準備…") :
-    esc(cap(t.model)) + (t.retried ? " 重新回答（第 " + (t.retried + 1) + " 次）…" : " 想一下…")) + "</div>";
+  if (t.ctx) h += T('<div class="ai-ctxline">背景：') + esc(t.ctx.title) + (t.ctx.private ? T("（日記，不送出）") : "") + "</div>";
+  if (t.status === "finding") return h + T('<div class="ai-a muted"><span class="spin"></span> 找相關的頁…</div></div>');
+  if (t.status === "asking") return h + T('<div class="ai-a muted"><span class="spin"></span> 交給 Claude…</div></div>');
+  if (t.status === "writing" && !t.text) h += '<div class="ai-a muted"><span class="spin"></span> ' + (!t.model ? (t.choice === "auto" ? T("Jev 選模型…") : T("準備…")) :
+    esc(cap(t.model)) + (t.retried ? T(" 重新回答（第 ") + (t.retried + 1) + T(" 次）…") : T(" 想一下…"))) + "</div>";
   h += '<div class="ai-a">' + (t.text ? md(t.text) : "") + (t.status === "writing" && t.text ? '<span class="ai-caret"></span>' : "");
-  if (t.status === "error") h += '<div class="banner">沒有回答：' + esc(t.error || "") +
-    (/log ?in|login|auth|登入/i.test(t.error || "") ? "。在終端機打 <code>claude</code> 登入後再試。" : "") + "</div>";
-  if (t.status === "stopped") h += '<div class="ai-meta">已停止。</div>';
+  if (t.status === "error") h += T('<div class="banner">沒有回答：') + esc(TS(t.error || "")) +
+    (/log ?in|login|auth|登入/i.test(t.error || "") ? T("。在終端機打 <code>claude</code> 登入後再試。") : "") + "</div>";
+  if (t.status === "stopped") h += T('<div class="ai-meta">已停止。</div>');
   const used = t.used || [];
   if (t.status !== "writing" && (used.length || t.ctxUsed)) {
-    h += '<details class="ai-used"><summary>讀了' + (t.ctxUsed ? "背景筆記和 " : " ") + used.length + " 頁" +
-      (t.mode === "jev" ? "（Jev 找的）" : "（關鍵字找的" + (t.searchError ? "，Jev 沒回應" : "") + "）") + (t.model ? " · " + esc(cap(t.model)) + "，" + esc(EFFORT_NAME[t.effort] || t.effort) + (t.why ? "（" + esc(t.why) + "）" : "") : "") + (t.seconds ? " · " + t.seconds + " 秒" : "") + "</summary>" +
-      (t.ctxUsed ? '<a class="wl" data-path="' + esc(t.ctxUsed.path) + '">' + esc(t.ctxUsed.title) + "</a>（背景）" : "") +
+    h += T('<details class="ai-used"><summary>讀了') + (t.ctxUsed ? T("背景筆記和 ") : " ") + used.length + T(" 頁") +
+      (t.mode === "jev" ? T("（Jev 找的）") : T("（關鍵字找的") + (t.searchError ? T("，Jev 沒回應") : "") + T("）")) + (t.model ? " · " + esc(cap(t.model)) + T("，") + esc(EFFORT_NAME[t.effort] || t.effort) + (t.why ? T("（") + esc(TS(t.why)) + T("）") : "") : "") + (t.seconds ? " · " + t.seconds + T(" 秒") : "") + "</summary>" +
+      (t.ctxUsed ? '<a class="wl" data-path="' + esc(t.ctxUsed.path) + '">' + esc(t.ctxUsed.title) + T("</a>（背景）") : "") +
       used.map(u => '<a class="wl" data-path="' + esc(u.path) + '">' + esc(u.title) + "</a>").join("") + "</details>";
   }
-  if (t.status === "writing") h += '<div class="ai-acts"><button data-stop="' + esc(t.id) + '">停止</button></div>';
-  else if (t.status === "done") h += '<div class="ai-acts"><button data-save="' + AI.turns.indexOf(t) + '">存成分析頁</button>' +
-    (t.ctx && !t.ctx.private && mine(t.ctx.path) ? '<button data-ingest="' + esc(t.ctx.path) + '">整理「' + esc(t.ctx.title) + "」</button>" : "") + "</div>";
+  if (t.status === "writing") h += '<div class="ai-acts"><button data-stop="' + esc(t.id) + T('">停止</button></div>');
+  else if (t.status === "done") h += '<div class="ai-acts"><button data-save="' + AI.turns.indexOf(t) + T('">存成分析頁</button>') +
+    (t.ctx && !t.ctx.private && mine(t.ctx.path) ? '<button data-ingest="' + esc(t.ctx.path) + T('">整理「') + esc(t.ctx.title) + T("」</button>") : "") + "</div>";
   return h + "</div></div>";
 }
 
@@ -1759,20 +1793,20 @@ function renderAI() {
   let conv = "";
   if (!AI.turns.length) {
     const ctx = aiContext();
-    const ex = (ctx && !ctx.private ? ["這篇的重點是什麼？", "這篇和我知識庫裡哪些概念有關？"] : []).concat(["我的筆記裡有哪些互相矛盾的說法？", "保險和信任有什麼關係？"]);
-    conv = '<div class="ai-intro"><h3>✦ 問 AI</h3><p>在上面的搜尋框打問題按 ⌘↵，或在下面直接問。Lumen 先找出相關的頁，連同目前打開的筆記交給 AI，回答裡的頁面都能點。</p>' +
-      '<p class="muted">AI 只回答，不能開檔案，也不會改任何東西。日記永遠不送出。</p>' +
+    const ex = (ctx && !ctx.private ? [T("這篇的重點是什麼？"), T("這篇和我知識庫裡哪些概念有關？")] : []).concat([T("我的筆記裡有哪些互相矛盾的說法？"), T("保險和信任有什麼關係？")]);
+    conv = T('<div class="ai-intro"><h3>✦ 問 AI</h3><p>在上面的搜尋框打問題按 ⌘↵，或在下面直接問。Lumen 先找出相關的頁，連同目前打開的筆記交給 AI，回答裡的頁面都能點。</p>') +
+      T('<p class="muted">AI 只回答，不能開檔案，也不會改任何東西。日記永遠不送出。</p>') +
       '<div class="ai-examples">' + ex.map(x => '<button data-example="' + esc(x) + '">' + esc(x) + "</button>").join("") + "</div></div>";
   }
   conv += AI.turns.map(turnHtml).join("");
-  el.innerHTML = '<div class="ai-head"><span>對話</span>' + (AI.turns.length ? '<button class="ghost" data-new>新對話</button>' : "") + "</div>" +
+  el.innerHTML = T('<div class="ai-head"><span>對話</span>') + (AI.turns.length ? T('<button class="ghost" data-new>新對話</button>') : "") + "</div>" +
     '<div class="ai-conv" id="ai-conv">' + conv + "</div>" +
     '<div class="ai-composer"><div id="ai-ctx" class="ai-ctx"></div>' +
-    '<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行）"></textarea>' +
-    '<div class="ai-send-row"><select id="ai-model" title="回答用的模型">' + aiModels().map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
+    T('<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行）"></textarea>') +
+    T('<div class="ai-send-row"><select id="ai-model" title="回答用的模型">') + aiModels().map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
     "</select>" +
-    '<select id="ai-effort" title="想多深：自動＝照你在問題裡說的，或 Jev 判斷">' + AI_EFFORTS.map(([v, l]) => '<option value="' + v + '"' + (v === aiEffort() ? " selected" : "") + ">" + l + "</option>").join("") +
-    '</select><button class="primary" id="ai-send">送出</button></div><div id="ai-sends" class="muted"></div></div>';
+    T('<select id="ai-effort" title="想多深：自動＝照你在問題裡說的，或 Jev 判斷">') + AI_EFFORTS.map(([v, l]) => '<option value="' + v + '"' + (v === aiEffort() ? " selected" : "") + ">" + l + "</option>").join("") +
+    T('</select><button class="primary" id="ai-send">送出</button></div><div id="ai-sends" class="muted"></div></div>');
   const inp = $("#ai-input"); inp.value = draft; if (focused) inp.focus();
   const c = $("#ai-conv"); if (atBottom) c.scrollTop = c.scrollHeight; else if (conv0) c.scrollTop = conv0.scrollTop;
   updateAICtx();
@@ -1782,9 +1816,9 @@ function updateAICtx() {
   const box = $("#ai-ctx");
   if (!box) return;
   const ctx = aiContext();
-  box.innerHTML = ctx ? '<span class="chip ctx">以「' + esc(ctx.title) + "」為背景" + (ctx.private ? "（日記，不送出）" : "") + ' <button data-ctx-off title="不要用這篇當背景">×</button></span>'
-    : AI.ctx === null && tab() && tab().kind === "note" ? '<button class="link-btn" data-ctx-on>＋ 用目前的筆記當背景</button>' : '<span class="muted">沒有背景筆記</span>';
-  $("#ai-sends").textContent = "會送給 " + (isGpt(aiModel()) ? "ChatGPT" : "Claude") + "：問題、相關的頁" + (ctx && !ctx.private ? "、背景筆記" : "") + "、這段對話。日記不送。";
+  box.innerHTML = ctx ? T('<span class="chip ctx">以「') + esc(ctx.title) + T("」為背景") + (ctx.private ? T("（日記，不送出）") : "") + T(' <button data-ctx-off title="不要用這篇當背景">×</button></span>')
+    : AI.ctx === null && tab() && tab().kind === "note" ? T('<button class="link-btn" data-ctx-on>＋ 用目前的筆記當背景</button>') : T('<span class="muted">沒有背景筆記</span>');
+  $("#ai-sends").textContent = T("會送給 ") + (isGpt(aiModel()) ? "ChatGPT" : "Claude") + T("：問題、相關的頁") + (ctx && !ctx.private ? T("、背景筆記") : "") + T("、這段對話。日記不送。");
 }
 
 $("#ai").addEventListener("click", e => {
@@ -1813,9 +1847,9 @@ $("#ai").addEventListener("click", e => {
   if (b.dataset.agDiff) return showAgentDiff(b.dataset.agId, b.dataset.agDiff);
   if (b.dataset.agUndo) {
     const t = AI.turns.find(x => x.id === b.dataset.agUndo);
-    dialog("全部復原？", "<p>把這次改的 " + t.changes.length + " 個知識庫檔案放回改之前的樣子；新建的頁移到 <code>.trash/</code>。這次寫的內容會先留成一版。</p>", "全部復原", true).then(ok => {
+    dialog(T("全部復原？"), T("<p>把這次改的 ") + t.changes.length + T(" 個知識庫檔案放回改之前的樣子；新建的頁移到 <code>.trash/</code>。這次寫的內容會先留成一版。</p>"), T("全部復原"), true).then(ok => {
       if (!ok) return;
-      api("/api/agent/undo", { id: t.id }).then(async () => { t.undone = true; renderAI(); await refreshTree(); toast("復原了。"); }).catch(err => toast(err.message));
+      api("/api/agent/undo", { id: t.id }).then(async () => { t.undone = true; renderAI(); await refreshTree(); toast(T("復原了。")); }).catch(err => toast(err.message));
     });
     return;
   }
@@ -1841,8 +1875,8 @@ function showConnect() {
   let el = $("#connect");
   if (!el) {
     el = document.createElement("div"); el.id = "connect"; el.className = "cn-back";
-    el.innerHTML = '<div class="cn" role="dialog" aria-modal="true" aria-label="連接 AI"><div class="cn-head"><h2>連接 AI</h2>' +
-      '<button class="ghost" data-cn-close title="關閉">✕</button></div><div id="cn-body"><p class="muted">檢查中…</p></div></div>';
+    el.innerHTML = T('<div class="cn" role="dialog" aria-modal="true" aria-label="連接 AI"><div class="cn-head"><h2>連接 AI</h2>') +
+      T('<button class="ghost" data-cn-close title="關閉">✕</button></div><div id="cn-body"><p class="muted">檢查中…</p></div></div>');
     document.body.append(el);
     el.addEventListener("click", connectClick);
     el.addEventListener("keydown", e => {
@@ -1868,7 +1902,7 @@ async function refreshConnect() {
   const html = [claudeCard(st.claude), chatgptCard(st.chatgpt), jevCard(st.jev)];
   const body = $("#cn-body");
   if (!body.querySelector(".cn-slot")) {
-    body.innerHTML = '<p class="muted cn-lead">用你自己的訂閱或金鑰。Lumen 不經手你的帳號密碼，用量算在你自己的方案裡。Claude Code 和 ChatGPT 至少連一個。</p>' +
+    body.innerHTML = T('<p class="muted cn-lead">用你自己的訂閱或金鑰。Lumen 不經手你的帳號密碼，用量算在你自己的方案裡。Claude Code 和 ChatGPT 至少連一個。</p>') +
       '<div class="cn-slot"></div><div class="cn-slot"></div><div class="cn-slot"></div>';
   }
   // only the cards that changed are redrawn: a poll while Claude installs never swallows a click elsewhere
@@ -1892,7 +1926,7 @@ async function refreshConnect() {
 
 // Every card follows one rule: 未連接 → 「連接」; 連接中… → 「取消」; 已連接 → 「中斷連接」 (and 「管理用量」 where the
 // service has a usage page). Each card: what it is for, what is in use now, the buttons, one line on what Lumen keeps.
-const CN_STATE = { off: "未連接", wait: "連接中…", on: "已連接" };
+const CN_STATE = { off: T("未連接"), wait: T("連接中…"), on: T("已連接") };
 function card(name, st, o) {
   return '<section class="cn-card"><div class="cn-row"><h3>' + name + (o.sub ? '<span class="cn-sub">' + o.sub + "</span>" : "") + '</h3><span class="cn-state ' + st + '">' + CN_STATE[st] + "</span></div>" +
     "<p>" + o.purpose + "</p>" + (o.detail ? '<div class="cn-detail">' + o.detail + "</div>" : "") +
@@ -1906,26 +1940,26 @@ function claudeCard(c) {
   const job = c.job || {};
   const installing = job.kind === "install" && job.status === "running";
   const waiting = job.kind === "login" && job.status === "waiting" && !c.logged_in;
-  const o = { sub: "Claude 訂閱（Pro、Max）登入", purpose: "用你的 Claude 訂閱回答問題、整理知識庫。" };
+  const o = { sub: T("Claude 訂閱（Pro、Max）登入"), purpose: T("用你的 Claude 訂閱回答問題、整理知識庫。") };
   let st;
   if (c.connected) {
     st = "on";
-    const plan = c.subscription ? "Claude " + (c.plan ? cap(c.plan) + " " : "") + "訂閱" : "Claude API 金鑰（按用量計費）";
-    o.detail = "目前使用：你的 " + esc(plan) + "。" + (c.subscription ? "" : '<span class="cn-err">這不是訂閱登入，用量會按 API 計費。</span>');
-    o.acts = cnBtn("claude-disconnect", "中斷連接") + cnLink("https://claude.ai/settings/usage", "管理用量");
-    o.note = "中斷連接只是 Lumen 不再使用 Claude Code，你在 Claude Code 的登入不受影響。";
+    const plan = c.subscription ? "Claude " + (c.plan ? cap(c.plan) + " " : "") + T("訂閱") : T("Claude API 金鑰（按用量計費）");
+    o.detail = T("目前使用：你的 ") + esc(plan) + T("。") + (c.subscription ? "" : T('<span class="cn-err">這不是訂閱登入，用量會按 API 計費。</span>'));
+    o.acts = cnBtn("claude-disconnect", T("中斷連接")) + cnLink("https://claude.ai/settings/usage", T("管理用量"));
+    o.note = T("中斷連接只是 Lumen 不再使用 Claude Code，你在 Claude Code 的登入不受影響。");
   } else if (installing || waiting) {
     st = "wait";
     o.detail = installing ? installProgress(c.install || {})
-      : job.terminal ? "已經打開終端機，照視窗裡的說明在瀏覽器登入，完成後這裡會自動變成已連接。"
-      : "瀏覽器會出現 Claude 的登入頁，登入並按「Authorize」，這裡會自動變成已連接。";
-    o.acts = cnBtn("claude-cancel", "取消") + (waiting && !job.terminal ? cnBtn("claude-terminal", "瀏覽器沒出現？改用終端機登入") : "");
-    o.note = "登入完全在 Anthropic 的網頁完成，Lumen 不經手你的帳號密碼。";
+      : job.terminal ? T("已經打開終端機，照視窗裡的說明在瀏覽器登入，完成後這裡會自動變成已連接。")
+      : T("瀏覽器會出現 Claude 的登入頁，登入並按「Authorize」，這裡會自動變成已連接。");
+    o.acts = cnBtn("claude-cancel", T("取消")) + (waiting && !job.terminal ? cnBtn("claude-terminal", T("瀏覽器沒出現？改用終端機登入")) : "");
+    o.note = T("登入完全在 Anthropic 的網頁完成，Lumen 不經手你的帳號密碼。");
   } else {
     st = "off";
-    o.acts = cnBtn("claude-connect", "連接 Claude Code", true);
-    o.note = c.logged_in ? "你已經登入 Claude Code，按一下就會用它。"
-      : (c.installed ? "" : "會先用 Anthropic 官方安裝程式裝好 Claude Code（不用管理員密碼），") + "接著在瀏覽器登入。Lumen 不經手你的帳號密碼。";
+    o.acts = cnBtn("claude-connect", T("連接 Claude Code"), true);
+    o.note = c.logged_in ? T("你已經登入 Claude Code，按一下就會用它。")
+      : (c.installed ? "" : T("會先用 Anthropic 官方安裝程式裝好 Claude Code（不用管理員密碼），")) + T("接著在瀏覽器登入。Lumen 不經手你的帳號密碼。");
   }
   if (job.status === "error" && job.error) o.err = esc(job.error) + (job.tail ? '<br><span class="small">' + esc(job.tail.slice(-200)) + "</span>" : "");
   return card("Claude Code", st, o);
@@ -1933,61 +1967,61 @@ function claudeCard(c) {
 
 // The official installer's progress: getting ready → downloading (bar, MB, time left) → installing → sign-in.
 function installProgress(p) {
-  const mins = s => s >= 90 ? "約 " + Math.round(s / 60) + " 分鐘" : "不到 2 分鐘";
+  const mins = s => s >= 90 ? T("約 ") + Math.round(s / 60) + T(" 分鐘") : T("不到 2 分鐘");
   let pct = 0, line;
-  if (p.phase === "setup") { pct = 100; line = "下載完成，正在安裝…"; }
+  if (p.phase === "setup") { pct = 100; line = T("下載完成，正在安裝…"); }
   else if (p.phase === "download" && p.pct != null) {
     pct = p.pct;
-    line = pct + "%・" + p.mb + " / " + p.total_mb + " MB" + (p.eta != null ? "・還要" + mins(p.eta) : "");
-  } else if (p.phase === "download") line = "已下載 " + p.mb + " MB";
-  else line = "選擇最快的下載路線…";
+    line = pct + "%・" + p.mb + " / " + p.total_mb + " MB" + (p.eta != null ? T("・還要") + mins(p.eta) : "");
+  } else if (p.phase === "download") line = T("已下載 ") + p.mb + " MB";
+  else line = T("選擇最快的下載路線…");
   const bar = '<div class="cn-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct +
     '"' + (p.phase === "download" && p.pct == null || !p.phase || p.phase === "start" ? ' data-busy="1"' : "") +
     '><span style="width:' + pct + '%"></span></div>';
-  return "正在用 Anthropic 官方安裝程式安裝 Claude Code，裝好會直接帶你登入。" + bar +
+  return T("正在用 Anthropic 官方安裝程式安裝 Claude Code，裝好會直接帶你登入。") + bar +
     '<div class="muted small cn-progress-line">' + esc(line) + "</div>";
 }
 
 function chatgptCard(g) {
-  const o = { purpose: "用你的 ChatGPT 付費方案（Go、Plus、Pro）回答問題、整理知識庫。OpenAI 不開放免費版給其他 app 使用。" };
+  const o = { purpose: T("用你的 ChatGPT 付費方案（Go、Plus、Pro）回答問題、整理知識庫。OpenAI 不開放免費版給其他 app 使用。") };
   let st;
   if (g.connected) {
     st = "on";
-    o.detail = "目前使用：<b>Using ChatGPT plan</b>" + (g.email ? '<span class="muted">（' + esc(g.email) + "）</span>" : "") + "。" +
-      (g.plan_use ? "" : '<span class="cn-err">你沒有同意讓 Lumen 使用方案額度，請中斷後重新連接。</span>');
-    o.acts = cnBtn("gpt-signout", "中斷連接") + cnLink("https://chatgpt.com/settings/usage", "Manage usage");
-    o.note = "中斷連接會撤銷並刪除 Lumen 的 ChatGPT 登入。";
+    o.detail = T("目前使用：<b>Using ChatGPT plan</b>") + (g.email ? T('<span class="muted">（') + esc(g.email) + T("）</span>") : "") + T("。") +
+      (g.plan_use ? "" : T('<span class="cn-err">你沒有同意讓 Lumen 使用方案額度，請中斷後重新連接。</span>'));
+    o.acts = cnBtn("gpt-signout", T("中斷連接")) + cnLink("https://chatgpt.com/settings/usage", "Manage usage");
+    o.note = T("中斷連接會撤銷並刪除 Lumen 的 ChatGPT 登入。");
   } else if (CN.waitGpt) {
     st = "wait";
-    o.detail = "等你在瀏覽器同意…如果 OpenAI 的頁面說「無法取得必要權限」，表示這個帳號的方案不能用在其他 app。";
-    o.acts = cnBtn("gpt-cancel", "取消");
-    o.note = "登入完全在 OpenAI 的網頁完成，Lumen 不經手你的帳號密碼。";
+    o.detail = T("等你在瀏覽器同意…如果 OpenAI 的頁面說「無法取得必要權限」，表示這個帳號的方案不能用在其他 app。");
+    o.acts = cnBtn("gpt-cancel", T("取消"));
+    o.note = T("登入完全在 OpenAI 的網頁完成，Lumen 不經手你的帳號密碼。");
   } else {
     st = "off";
     o.acts = '<button class="primary cn-gpt" data-cn="gpt-start">Continue with ChatGPT</button>';
-    o.note = "在 OpenAI 的網頁同意後就連上了。用量算在你的 ChatGPT 方案，和其他 app 共用同一份額度。";
+    o.note = T("在 OpenAI 的網頁同意後就連上了。用量算在你的 ChatGPT 方案，和其他 app 共用同一份額度。");
   }
   return card("ChatGPT", st, o);
 }
 
 function jevCard(j) {
-  const o = { purpose: "幫 Lumen 找相關的頁、判斷問題難度、挑出筆記的重點段落、檢查整理結果。可以不連，搜尋會改用關鍵字。" };
+  const o = { purpose: T("幫 Lumen 找相關的頁、判斷問題難度、挑出筆記的重點段落、檢查整理結果。可以不連，搜尋會改用關鍵字。") };
   let st;
   if (j.connected) {
     st = "on";
-    const where = { app: "存在 Lumen", env: "環境變數 TYPESAFE_API_KEY", shared: "~/.config/typesafe" }[j.source];
-    o.detail = "目前使用：你的 TypeSafe 金鑰（" + where + "）。";
-    o.acts = cnBtn("jev-remove", "中斷連接");
-    o.note = j.source === "app" ? "中斷連接會刪掉 Lumen 存的金鑰。" : "中斷連接只是 Lumen 不再使用 Jev，你的金鑰檔案不受影響。";
+    const where = { app: T("存在 Lumen"), env: T("環境變數 TYPESAFE_API_KEY"), shared: "~/.config/typesafe" }[j.source];
+    o.detail = T("目前使用：你的 TypeSafe 金鑰（") + where + T("）。");
+    o.acts = cnBtn("jev-remove", T("中斷連接"));
+    o.note = j.source === "app" ? T("中斷連接會刪掉 Lumen 存的金鑰。") : T("中斷連接只是 Lumen 不再使用 Jev，你的金鑰檔案不受影響。");
   } else if (CN.jevEditing) {
     st = "off";                                    // nothing is running yet: it waits for the key
-    o.detail = '<input id="cn-jev-key" type="password" autocomplete="off" placeholder="貼上 TypeSafe API 金鑰">';
-    o.acts = cnBtn("jev-save", "儲存", true) + cnBtn("jev-cancel", "取消");
-    o.note = "貼上金鑰後按「儲存」。儲存前會先試一次，確定能用。金鑰只存在這台電腦（只有你的帳號能讀）。";
+    o.detail = T('<input id="cn-jev-key" type="password" autocomplete="off" placeholder="貼上 TypeSafe API 金鑰">');
+    o.acts = cnBtn("jev-save", T("儲存"), true) + cnBtn("jev-cancel", T("取消"));
+    o.note = T("貼上金鑰後按「儲存」。儲存前會先試一次，確定能用。金鑰只存在這台電腦（只有你的帳號能讀）。");
   } else {
     st = "off";
-    o.acts = cnBtn("jev-connect", "連接 Jev", true);
-    o.note = "用你自己的 TypeSafe 金鑰，費用很低。";
+    o.acts = cnBtn("jev-connect", T("連接 Jev"), true);
+    o.note = T("用你自己的 TypeSafe 金鑰，費用很低。");
   }
   if (CN.jevMsg) o.err = esc(CN.jevMsg);
   return card("Jev", st, o);
@@ -1996,7 +2030,7 @@ function jevCard(j) {
 async function gptWelcome() {
   await api("/api/connect/chatgpt/welcomed", {}).catch(() => {});
   dialog("You're using your ChatGPT plan", "<p>Eligible usage in this app uses your ChatGPT plan. Manage usage in your ChatGPT settings.</p>" +
-    '<p class="muted">之後在 Lumen 裡用 ChatGPT 回答，用量算在你的 ChatGPT 方案。可以在 <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener">ChatGPT 設定 → Usage</a> 查看。</p>', "Got it");
+    T('<p class="muted">之後在 Lumen 裡用 ChatGPT 回答，用量算在你的 ChatGPT 方案。可以在 <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener">ChatGPT 設定 → Usage</a> 查看。</p>'), "Got it");
 }
 
 async function connectClick(e) {
@@ -2005,25 +2039,25 @@ async function connectClick(e) {
   if (t.hasAttribute("data-cn-close")) return closeConnect();
   const what = t.dataset.cn;
   const run = async (path, body = {}) => { try { return await api(path, body); } catch (err) { toast(err.message); return null; } };
-  const sure = (name, more) => dialog("中斷 " + name + " 連接？", "<p>" + more + "之後隨時可以再連接。</p>", "中斷連接", true);
+  const sure = (name, more) => dialog(T("中斷 ") + name + T(" 連接？"), "<p>" + more + T("之後隨時可以再連接。</p>"), T("中斷連接"), true);
   if (what === "claude-connect") await run("/api/connect/claude/connect");
   else if (what === "claude-terminal") await run("/api/connect/claude/terminal");
   else if (what === "claude-cancel") await run("/api/connect/claude/cancel");
-  else if (what === "claude-disconnect") { if (await sure("Claude", "Lumen 不再使用 Claude Code；你在 Claude Code 的登入不受影響。")) await run("/api/connect/claude/disconnect"); }
+  else if (what === "claude-disconnect") { if (await sure("Claude", T("Lumen 不再使用 Claude Code；你在 Claude Code 的登入不受影響。"))) await run("/api/connect/claude/disconnect"); }
   else if (what === "gpt-start") { if (await run("/api/connect/chatgpt/start")) CN.waitGpt = true; }
   else if (what === "gpt-cancel") CN.waitGpt = false;
-  else if (what === "gpt-signout") { if (await sure("ChatGPT", "Lumen 會撤銷並刪除這台電腦上的 ChatGPT 登入。")) await run("/api/connect/chatgpt/signout"); }
+  else if (what === "gpt-signout") { if (await sure("ChatGPT", T("Lumen 會撤銷並刪除這台電腦上的 ChatGPT 登入。"))) await run("/api/connect/chatgpt/signout"); }
   else if (what === "jev-connect") { const r = await run("/api/connect/jev/connect"); CN.jevMsg = ""; if (r && r.need_key) CN.jevEditing = true; else await refreshTree(); }
   else if (what === "jev-cancel") { CN.jevEditing = false; CN.jevMsg = ""; }
   else if (what === "jev-save") {
     const k = ($("#cn-jev-key") || {}).value.trim(); if (!k) return;
-    t.disabled = true; t.textContent = "測試中…";
+    t.disabled = true; t.textContent = T("測試中…");
     try { await api("/api/connect/jev/save", { key: k }); CN.jevMsg = ""; CN.jevEditing = false; await refreshTree(); }
     catch (err) { CN.jevMsg = err.message; }
   }
   else if (what === "jev-remove") {
     const own = ((await api("/api/connect/status").catch(() => ({}))).jev || {}).source === "app";
-    if (await sure("Jev", own ? "Lumen 會刪掉它存的金鑰。" : "Lumen 不再使用 Jev；你的金鑰檔案不受影響。")) { await run("/api/connect/jev/remove"); await refreshTree(); }
+    if (await sure("Jev", own ? T("Lumen 會刪掉它存的金鑰。") : T("Lumen 不再使用 Jev；你的金鑰檔案不受影響。"))) { await run("/api/connect/jev/remove"); await refreshTree(); }
     CN.jevMsg = "";
   }
   refreshConnect();

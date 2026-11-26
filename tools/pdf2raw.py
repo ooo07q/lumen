@@ -40,14 +40,15 @@ import pymupdf
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
     import pymupdf4llm   # prints an optional-OCR notice on import
 
-VAULT = os.path.abspath(os.path.expanduser(os.environ.get("NOTES_VAULT")
+VAULT = os.path.abspath(os.path.expanduser(os.environ.get("LUMEN_VAULT")
                                            or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 RAW = os.path.join(VAULT, "raw") if os.path.isdir(os.path.join(VAULT, "raw")) else VAULT    # as wiki.py
-DATA = os.path.abspath(os.environ.get("NOTES_DATA") or (os.path.join(VAULT, "tools") if os.path.isdir(os.path.join(VAULT, "tools"))
+DATA = os.path.abspath(os.environ.get("LUMEN_DATA") or (os.path.join(VAULT, "tools") if os.path.isdir(os.path.join(VAULT, "tools"))
                                                         else os.path.join(VAULT, ".lumen")))
 def attachment_folder():
     """Where attachments go: Obsidian's "attachment folder" setting when it names a folder inside the notes, else
-    <notes>/assets/. PDFs are looked for in both (the app puts dropped files in the first)."""
+    <notes>/Attachments/ (<notes>/assets/ in the raw/ layout or where a vault already has one). PDFs are looked
+    for in every attachment folder."""
     try:
         f = json.load(open(os.path.join(VAULT, ".obsidian", "app.json"), encoding="utf-8")).get("attachmentFolderPath")
     except (OSError, ValueError, AttributeError):
@@ -56,12 +57,15 @@ def attachment_folder():
         full = os.path.normpath(os.path.join(VAULT, f.strip("/ ")))
         if full == RAW or full.startswith(RAW + os.sep):
             return full
-    return os.path.join(RAW, "assets")
+    if RAW != VAULT or os.path.isdir(os.path.join(RAW, "assets")):   # the raw/ layout, or a vault already using assets/
+        return os.path.join(RAW, "assets")
+    return os.path.join(RAW, "Attachments")
 
 
-PDF_DIRS = sorted({os.path.join(RAW, "assets"), attachment_folder()})   # PDFs anywhere under these, any subfolder
-PDF_DIRS = [d for d in PDF_DIRS if not any(d.startswith(o + os.sep) for o in PDF_DIRS)]
-IMG_DIR = os.path.join(RAW, "assets")          # figures: raw/assets/<note title>/
+ATTACH = attachment_folder()
+ATTACH_DIRS = sorted({ATTACH} | ({os.path.join(RAW, "assets")} if os.path.isdir(os.path.join(RAW, "assets")) else set()))
+PDF_DIRS = [d for d in ATTACH_DIRS if not any(d.startswith(o + os.sep) for o in ATTACH_DIRS)]   # PDFs anywhere under these
+IMG_DIR = ATTACH                                # figures: <attachments>/<note title>/
 TODAY = datetime.date.today().isoformat()
 SKIPPED = os.path.join(DATA, ".pdf2raw_skipped.json")   # PDFs that could not be converted
 CHAPTERS_DIR = os.path.join(DATA, "chapters")            # hand-written chapter lists (books without an outline)
@@ -119,7 +123,7 @@ def converted_pdfs():
     """PDF paths (relative to the vault) that some raw note already points to via `pdf:`."""
     done = set()
     for p in glob.glob(os.path.join(RAW, "**", "*.md"), recursive=True):
-        if os.sep + "assets" + os.sep in p:
+        if any(p.startswith(d + os.sep) for d in ATTACH_DIRS):
             continue
         m = re.search(r'^pdf:\s*"?\[\[([^\]|]+)', frontmatter(p), re.M)
         if m:

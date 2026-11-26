@@ -116,13 +116,18 @@ Each key point states one of the note's claims with the evidence the note gives 
 or case (a named company's campaign, "a survey of 3,000 households"), not only the gist. A reader should recognise the note from
 its key points.
 
+Write only what the text you were given says. When the note is a work you know (a well-known book), don't fill in
+from memory: no examples, numbers or chapters that aren't in this text, and for one part of a long note, nothing from
+the other parts. A table of contents names later chapters; it doesn't summarise them. Scanned text has typos: fix the
+obvious ones, and leave out what you can't read rather than guess.
+
 Entity or concept page: a one-paragraph summary at the top, then sections that grow over time (a concept's
 first is usually `## What the sources say`), then `## Timeline` (if dated facts), `## Related`,
 `## Tensions & open questions`, `## Sources`.
 
 Analysis page: `**Question:** …`, then `## Answer`, `## Evidence & reasoning`, `## Caveats`, `## Sources`.
 
-## The notes tools
+## Lumen's tools
 
 `search` (BM25 over the wiki), `outline` (a note's map, `hits`, `skim`), `log`; with Jev on also `prep` (the full
 report before reading a note), `skim`, `jev_query` (best pages for a question); in the act phase also `cite`
@@ -158,7 +163,9 @@ and updated, contradictions found, what you couldn't do, suggested next steps.
 
 Plan:
 1. Run `prep` on the note (Jev off: `outline` with `hits`). It gives the size and reading mode.
-2. Don't read a note whole unless the user asks you to (the task says so).
+2. Don't read a note whole unless the user asks you to: the task says so, or the user writes it (in their changes to
+   the plan or in the chat: "read it all", 「整篇讀」, 「全部讀」 and the like). Then call `read` with `whole: true`
+   (for a long note, still only this run's part).
    The app's `read` gives you a note's key passages: the paragraphs Jev rates as carrying about 80%
    of the note's key points (its central claims, findings, definitions, conclusion), with its headings; the rest
    is left out. Read the skim in prep's report first, then those passages.
@@ -173,10 +180,12 @@ Plan:
 Act:
 1. Write `wiki/sources/<Title>.md`. Note which parts were read if not all
    (`> [!note] Read in key passages: …`).
-2. Jev on: `check_source` with the title; read the passages it names; add what's missing, fix what's wrong.
-   Jev off: reread the page against the parts you read; check every name and number.
-3. Integrate: additions to existing pages go through `cite` (one call, many blocks); new pages with `write`; fixes,
+2. Integrate: additions to existing pages go through `cite` (one call, many blocks); new pages with `write`; fixes,
    summary changes and contradiction callouts with `edit`. Add cross-links in both directions where natural.
+3. Jev on: `check_source` with the title, and as `added` the cite blocks plus each new page (`=== Page | (page)`
+   then its text); read the passages it names; add what's missing, fix or remove what the text doesn't back, on
+   the source page and on the other pages. Jev off: reread the pages against the parts you read; check every name
+   and number.
 4. Update `wiki/Overview.md` if the big picture shifted.
 5. Append to `wiki/log.md` (format below), then run `lint` (not `full`) and fix errors you introduced and the
    name warnings about pages you created or changed. Wanted pages (links to pages that don't exist yet) are fine.
