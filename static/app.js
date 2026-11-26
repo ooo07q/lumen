@@ -531,6 +531,7 @@ function stash() {
   t.scroll = $(".center").scrollTop;
   const ed = $("#editor");
   if (t.editing && ed) t.editText = Wys.value(ed);
+  if (t.dirty && !t.external) saveTab(t, true);    // leaving the tab: save it (the text is taken now)
 }
 
 // ---------- back / forward
@@ -579,8 +580,9 @@ function activate(i, push = true) {
   if (push) navRecord();
 }
 
-function closeTab(i) {
+async function closeTab(i) {
   const t = S.tabs[i];
+  if (t.dirty && !t.external) { if (i === S.active) stash(); await saveTab(t, true); i = S.tabs.indexOf(t); if (i < 0) return; }
   if (t.dirty && !confirm(T("「") + t.title + T("」還沒儲存，確定關閉？"))) return;
   stash();
   S.tabs.splice(i, 1);
@@ -685,15 +687,15 @@ function renderView() {
   const n = t.note;
   let tools = "";
   if (n.editable) tools = '<div class="note-tools">' + T('<button data-act="history" class="ghost" title="這篇以前的版本，可以還原">版本</button>') +
-    T('<button data-act="delete" class="ghost" title="移到垃圾桶，可復原">') + TRASH_SVG + T(" 刪除</button>") + (t.editing ? T('<button data-act="preview" title="離開編輯（修改還沒存，記得儲存）">完成</button><button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>') :
-    T('<button data-act="edit">編輯</button>') + (t.dirty ? T('<button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>') : "")) + '<span class="muted save-msg">' + esc(t.msg || (t.editing ? T("⌘S 儲存 · 拖進或貼上檔案會存成附件") : "")) + "</span></div>";
+    T('<button data-act="delete" class="ghost" title="移到垃圾桶，可復原">') + TRASH_SVG + T(" 刪除</button>") + (t.editing ? T('<button data-act="preview" class="primary" title="離開編輯（修改會自動儲存）">完成</button><button data-act="revert" title="回到這次開始編輯前的內容">還原這次編輯</button>') :
+    T('<button data-act="edit">編輯</button>') + (t.dirty ? T('<button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>') : "")) + '<span class="muted save-msg">' + esc(t.msg || (t.editing ? T("修改會自動儲存 · 拖進或貼上檔案會存成附件") : "")) + "</span></div>";
   if (t.external) tools += T('<div class="banner">這篇在別處被改過。<button data-act="reload">載入新版本</button>（你這裡的修改會不見）</div>');
   v.innerHTML = '<div class="note-head">' + headHtml(n, t) + "</div>" + tools +
     (t.editing ? '<div id="editor" class="editor wys" contenteditable="true" spellcheck="false"></div>' : '<article id="note" class="note">' + bodyHtml(n, t.full) + "</article>");
   if (t.editing) {
     const ed = $("#editor");
     Wys.mount(ed, t.editText ?? n.text);
-    Wys.attach(ed, () => { if (!t.dirty) { t.dirty = true; renderTabbar(); } });
+    Wys.attach(ed, () => noteChanged(t));
     ed._open = name => { const rel = resolveLink(name) || attachmentRel(name); if (rel) openNote(rel, { newTab: true }); };
     ed.before(Wys.bar(ed, pickAttachments));
   }
@@ -746,7 +748,7 @@ function renderFile(v, t) {
 function startEdit() {
   const t = tab();
   if (!t || t.kind !== "note" || !t.note || !t.note.editable) return;
-  t.editing = true; t.msg = ""; renderView(); $("#editor").focus();
+  t.editing = true; t.msg = ""; t.editBase = t.editText ?? t.note.text; renderView(); $("#editor").focus();
 }
 
 let RENAMING = null;           // a rename in flight: a save waits for it, so it goes to the new name
@@ -754,16 +756,56 @@ async function save() {
   if (RENAMING) await RENAMING.catch(() => {});
   return saveTab(tab());
 }
-async function saveTab(t) {
+// ---------- autosave: an edited note saves itself AUTOSAVE_IDLE after typing stops, and at least every
+// AUTOSAVE_MAX while typing goes on; also when editing ends, the tab is left or closed, or the window loses focus.
+// A save never redraws the editor (the caret and undo stay), and never overwrites a note changed elsewhere.
+const AUTOSAVE_IDLE = 2000, AUTOSAVE_MAX = 10000;
+function liveText(t) {                               // the tab's text now: its editor if it's on screen
+  const ed = t.editing && tab() === t ? $("#editor") : null;
+  return ed ? Wys.value(ed) : t.editText ?? t.note.text;
+}
+function noteChanged(t) {
+  if (!t.dirty) { t.dirty = true; t.dirtySince = Date.now(); renderTabbar(); }
+  clearTimeout(t.autoTimer);
+  t.autoTimer = setTimeout(() => autoSave(t), Math.max(0, Math.min(AUTOSAVE_IDLE, t.dirtySince + AUTOSAVE_MAX - Date.now())));
+}
+function autoSave(t) {
+  if (!t.dirty || t.external || !S.tabs.includes(t)) return;
+  const ed = t.editing && tab() === t ? $("#editor") : null;
+  if (ed && ed._composing) { t.autoTimer = setTimeout(() => autoSave(t), 500); return; }   // mid-word (注音): wait for it
+  saveTab(t, true);
+}
+function showSaveMsg(t) {
+  if (tab() !== t) return;
+  const m = $(".save-msg");
+  if (m && t.editing) m.textContent = t.msg; else renderView();
+}
+async function saveTab(t, auto) {
   if (!t || t.kind !== "note" || !(t.editing || t.dirty)) return;
-  const text = t.editing && $("#editor") ? Wys.value($("#editor")) : t.editText;
-  try {
-    const r = await api("/api/save", { path: t.path, text, mtime: t.note.mtime });
-    t.note.text = text; t.note.mtime = r.mtime; t.dirty = false; t.editText = text; t.external = false;
-    const d = new Date();
-    t.msg = T("已儲存 ") + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
-    renderTabbar(); renderView(); loadPanel(true);
-  } catch (e) { t.msg = T("沒存成：") + e.message; renderView(); }
+  if (t.saving) { t.again = true; return t.saving; }     // one save at a time; the newer text goes next
+  clearTimeout(t.autoTimer);
+  const text = liveText(t);
+  if (t.editing) t.editText = text;
+  t.saving = (async () => {
+    try {
+      const r = await api("/api/save", { path: t.path, text, mtime: t.note.mtime });
+      t.note.text = text; t.note.mtime = r.mtime; t.external = false;
+      if (liveText(t) === text) { t.dirty = false; t.dirtySince = null; }
+      else t.again = true;                           // typed while it was saving
+      const d = new Date();
+      t.msg = T(auto ? "已自動儲存 " : "已儲存 ") + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+      renderTabbar(); showSaveMsg(t);
+      if (!t.editing) loadPanel(true);
+    } catch (e) {
+      t.msg = T("沒存成：") + e.message;
+      if (e.data && /別處/.test(e.data.error || "")) { t.external = true; if (tab() === t) renderView(); }
+      else showSaveMsg(t);
+    } finally {
+      t.saving = null;
+      if (t.again) { t.again = false; if (t.dirty) noteChanged(t); }
+    }
+  })();
+  return t.saving;
 }
 
 async function reloadTab(t) {
@@ -788,8 +830,21 @@ $("#view").addEventListener("click", e => {
   const t = tab();
   const act = b.dataset.act;
   if (act === "edit") startEdit();
-  else if (act === "preview") { t.editText = Wys.value($("#editor")); t.editing = false; t.note = Object.assign({}, t.note, { text: t.editText }); renderView(); }
+  else if (act === "preview") (async () => {          // Done: save what's left, then show the note
+    const text = Wys.value($("#editor"));
+    t.editText = text; t.editing = false;
+    if (t.dirty && !t.external) await saveTab(t);
+    t.note = Object.assign({}, t.note, { text: t.editText }); renderView();
+  })();
   else if (act === "save") save();
+  else if (act === "revert" && t.editing) (async () => {   // back to the text from before this editing began
+    const now = Wys.value($("#editor"));
+    if (now === t.editBase) { t.editing = false; t.dirty = false; t.msg = ""; renderView(); return; }
+    if (!confirm(T("回到這次開始編輯前的內容？（之前的內容也可以從「版本」找回）"))) return;
+    t.editing = false; t.editText = t.editBase; t.dirty = true;
+    await saveTab(t);
+    t.note = Object.assign({}, t.note, { text: t.editText }); renderView();
+  })();
   else if (act === "revert") { if (!t.dirty || confirm(T("放棄還沒儲存的修改？"))) { t.editing = false; reloadTab(t); } }
   else if (act === "reload") reloadTab(t);
   else if (act === "next-hl") nextHighlight();
@@ -804,7 +859,16 @@ document.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); }
   if ((e.metaKey || e.ctrlKey) && e.key === "w" && tab()) { e.preventDefault(); closeTab(S.active); }
 });
-window.addEventListener("beforeunload", e => { if (S.tabs.some(t => t.dirty)) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("blur", () => { const t = tab(); if (t && t.dirty && !t.external) saveTab(t, true); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { const t = tab(); if (t && t.dirty && !t.external) saveTab(t, true); } });
+window.addEventListener("beforeunload", e => {
+  for (const t of S.tabs) {                          // a last try for unsaved notes (small ones fit a keepalive request)
+    if (!t.dirty || t.external || t.kind !== "note") continue;
+    try { fetch("/api/save", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" },
+                               body: JSON.stringify({ path: t.path, text: liveText(t), mtime: t.note.mtime }) }); } catch (err) {}
+  }
+  if (S.tabs.some(t => t.dirty)) { e.preventDefault(); e.returnValue = ""; }
+});
 
 // ---------- attachments: drop or paste files into a note
 
@@ -836,7 +900,7 @@ async function attach(files) {
     const ed = $("#editor");
     ed.focus();
     Wys.insertMd(ed, ins);
-    toast(T("附件存進 ") + S.tree.attach_to + T("/，連結插在游標處。記得儲存。"));
+    toast(T("附件存進 ") + S.tree.attach_to + T("/，連結插在游標處，會自動儲存。"));
   } else {
     if (t.dirty) { toast(T("先儲存或放棄修改，再加附件。")); return; }
     t.editing = true; t.editText = t.note.text.replace(/\s*$/, "") + "\n\n" + ins + "\n"; t.dirty = true;
@@ -1233,7 +1297,7 @@ async function poll() {
     S.sigs = { raw: c.raw, wiki: c.wiki };
     for (const t of S.tabs) {
       if (t.kind !== "note" || !t.note || c.mtimes[t.path] == null) continue;
-      if (Math.abs(c.mtimes[t.path] - t.note.mtime) < 0.001) continue;
+      if (t.saving || Math.abs(c.mtimes[t.path] - t.note.mtime) < 0.001) continue;   // its own save, in flight
       if (t.dirty || t.editing) { if (!t.external) { t.external = true; if (tab() === t) renderView(); } }
       else reloadTab(t);
     }
@@ -1577,7 +1641,7 @@ $("#brand").addEventListener("click", async e => {
 // The app finds the pages (Jev, or keywords with Jev off) and sends them with the open note (never the journal);
 // Claude Code, with no tools, writes the answer with [[page]] citations.
 
-const AI = { turns: [], ctx: undefined };       // ctx undefined: follow the open note; null: none
+const AI = { turns: [], ctx: undefined, attach: [] };   // ctx undefined: follow the open note; null: none. attach: files picked with @
 const CLAUDE_MODELS = [["auto", T("Claude：自動（Jev 選）")], ["haiku", T("Claude Haiku：快、省")], ["sonnet", T("Claude Sonnet：一般")], ["opus", T("Claude Opus：最強、最耗額度")]];
 const GPT_TIER = { fast: T("快、省"), balanced: T("一般"), strong: T("最強、最耗額度") };
 let GPT_MODELS = [];          // the models the user's ChatGPT plan offers, from its catalogue (costs no usage)
@@ -1635,7 +1699,7 @@ async function askAI(q) {
   input.value = ""; quick.hidden = true; input.blur();
   if ($("#ai-input")) $("#ai-input").value = "";
   showRight("ai");
-  const turn = { q, ctx: aiContext(), status: "finding", sources: [], text: "" };
+  const turn = { q, ctx: aiContext(), attach: AI.attach.slice(), status: "finding", sources: [], text: "" };
   AI.turns.push(turn); renderAI();
   const jev = jevUsable();
   let r = jev ? JEV_CACHE.get(q) : null;
@@ -1646,10 +1710,10 @@ async function askAI(q) {
   const history = AI.turns.filter(t => t !== turn && t.status === "done").map(t => ({ q: t.q, a: t.text }));
   try {
     const gpt = isGpt(aiModel());
-    const a = await api("/api/ai/ask", { q, context: turn.ctx && !turn.ctx.private ? turn.ctx.path : null,
+    const a = await api("/api/ai/ask", { q, context: turn.ctx && !turn.ctx.private ? turn.ctx.path : null, attach: turn.attach.map(x => x.path),
       sources: turn.sources.map(x => x.path), history, provider: gpt ? "chatgpt" : "claude",
       model: aiModel(), effort: aiEffort(), jev: !!jevUsable() });
-    Object.assign(turn, { id: a.id, used: a.used, ctxUsed: a.context, choice: a.choice, status: "writing" });
+    Object.assign(turn, { id: a.id, used: a.used, ctxUsed: a.context, attUsed: a.attached || [], choice: a.choice, status: "writing" });
   } catch (e) {
     turn.status = "error"; turn.error = e.message; renderAI();
     if (e.data && e.data.connect) showConnect();
@@ -1771,10 +1835,12 @@ function turnHtml(t) {
     (/log ?in|login|auth|登入/i.test(t.error || "") ? T("。在終端機打 <code>claude</code> 登入後再試。") : "") + "</div>";
   if (t.status === "stopped") h += T('<div class="ai-meta">已停止。</div>');
   const used = t.used || [];
-  if (t.status !== "writing" && (used.length || t.ctxUsed)) {
-    h += T('<details class="ai-used"><summary>讀了') + (t.ctxUsed ? T("背景筆記和 ") : " ") + used.length + T(" 頁") +
+  const attU = t.attUsed || [];
+  if (t.status !== "writing" && (used.length || t.ctxUsed || attU.length)) {
+    h += T('<details class="ai-used"><summary>讀了') + (t.ctxUsed ? T("背景筆記和 ") : " ") + (attU.length ? attU.length + T(" 個 @ 的檔案和 ") : "") + used.length + T(" 頁") +
       (t.mode === "jev" ? T("（Jev 找的）") : T("（關鍵字找的") + (t.searchError ? T("，Jev 沒回應") : "") + T("）")) + (t.model ? " · " + esc(cap(t.model)) + T("，") + esc(EFFORT_NAME[t.effort] || t.effort) + (t.why ? T("（") + esc(TS(t.why)) + T("）") : "") : "") + (t.seconds ? " · " + t.seconds + T(" 秒") : "") + "</summary>" +
       (t.ctxUsed ? '<a class="wl" data-path="' + esc(t.ctxUsed.path) + '">' + esc(t.ctxUsed.title) + T("</a>（背景）") : "") +
+      attU.map(u => '<a class="wl" data-path="' + esc(u.path) + '">@' + esc(u.title) + "</a>").join("") +
       used.map(u => '<a class="wl" data-path="' + esc(u.path) + '">' + esc(u.title) + "</a>").join("") + "</details>";
   }
   if (t.status === "writing") h += '<div class="ai-acts"><button data-stop="' + esc(t.id) + T('">停止</button></div>');
@@ -1791,7 +1857,7 @@ document.addEventListener("change", e => {
 
 function renderAI() {
   const el = $("#ai");
-  const old = $("#ai-input"), draft = old ? old.value : "", focused = old && document.activeElement === old;
+  const old = $("#ai-input"), draft = old ? old.value : "", focused = old && document.activeElement === old, caret0 = old ? old.selectionStart : 0;
   const conv0 = $("#ai-conv"), atBottom = !conv0 || conv0.scrollHeight - conv0.scrollTop - conv0.clientHeight < 40;
   let conv = "";
   if (!AI.turns.length) {
@@ -1804,8 +1870,8 @@ function renderAI() {
   conv += AI.turns.map(turnHtml).join("");
   el.innerHTML = T('<div class="ai-head"><span>對話</span>') + (AI.turns.length ? T('<button class="ghost" data-new>新對話</button>') : "") + "</div>" +
     '<div class="ai-conv" id="ai-conv">' + conv + "</div>" +
-    '<div class="ai-composer"><div id="ai-ctx" class="ai-ctx"></div>' +
-    T('<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行）"></textarea>') +
+    '<div class="ai-composer"><div id="ai-at" class="ai-at" hidden></div><div id="ai-ctx" class="ai-ctx"></div>' +
+    T('<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行，@ 加入檔案）"></textarea>') +
     T('<div class="ai-send-row"><select id="ai-model" title="回答用的模型">') + aiModels().map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
     "</select>" +
     T('<select id="ai-effort" title="想多深：自動＝照你在問題裡說的，或 Jev 判斷">') + AI_EFFORTS.map(([v, l]) => '<option value="' + v + '"' + (v === aiEffort() ? " selected" : "") + ">" + l + "</option>").join("") +
@@ -1813,15 +1879,19 @@ function renderAI() {
   const inp = $("#ai-input"); inp.value = draft; if (focused) inp.focus();
   const c = $("#ai-conv"); if (atBottom) c.scrollTop = c.scrollHeight; else if (conv0) c.scrollTop = conv0.scrollTop;
   updateAICtx();
+  if (focused && AT.start >= 0) { inp.selectionStart = inp.selectionEnd = caret0; renderAt(inp); }   // a redraw (the connection check) mustn't close the @ list
 }
 
 function updateAICtx() {
   const box = $("#ai-ctx");
   if (!box) return;
   const ctx = aiContext();
-  box.innerHTML = ctx ? T('<span class="chip ctx">以「') + esc(ctx.title) + T("」為背景") + (ctx.private ? T("（日記，不送出）") : "") + T(' <button data-ctx-off title="不要用這篇當背景">×</button></span>')
-    : AI.ctx === null && tab() && tab().kind === "note" ? T('<button class="link-btn" data-ctx-on>＋ 用目前的筆記當背景</button>') : T('<span class="muted">沒有背景筆記</span>');
-  $("#ai-sends").textContent = T("會送給 ") + (isGpt(aiModel()) ? "ChatGPT" : "Claude") + T("：問題、相關的頁") + (ctx && !ctx.private ? T("、背景筆記") : "") + T("、這段對話。日記不送。");
+  const att = AI.attach.filter(a => !ctx || a.path !== ctx.path);
+  box.innerHTML = (ctx ? T('<span class="chip ctx">以「') + esc(ctx.title) + T("」為背景") + (ctx.private ? T("（日記，不送出）") : "") + T(' <button data-ctx-off title="不要用這篇當背景">×</button></span>')
+    : AI.ctx === null && tab() && tab().kind === "note" ? T('<button class="link-btn" data-ctx-on>＋ 用目前的筆記當背景</button>') : att.length ? "" : T('<span class="muted">沒有背景筆記</span>')) +
+    att.map(a => '<span class="chip ctx at">@' + esc(a.title) + ' <button data-at-off="' + esc(a.path) + T('" title="不要用這個檔案當背景">×</button></span>')).join("");
+  $("#ai-sends").textContent = T("會送給 ") + (isGpt(aiModel()) ? "ChatGPT" : "Claude") + T("：問題、相關的頁") + (ctx && !ctx.private ? T("、背景筆記") : "") +
+    (att.length ? T("、@ 的檔案") : "") + T("、這段對話。日記不送。");
 }
 
 $("#ai").addEventListener("click", e => {
@@ -1857,10 +1927,103 @@ $("#ai").addEventListener("click", e => {
     return;
   }
   if (b.hasAttribute("data-ctx-off")) { AI.ctx = null; updateAICtx(); return; }
+  if (b.dataset.atOff) { AI.attach = AI.attach.filter(a => a.path !== b.dataset.atOff); updateAICtx(); return; }
   if (b.hasAttribute("data-ctx-on")) { AI.ctx = undefined; updateAICtx(); return; }
-  if (b.hasAttribute("data-new")) { AI.turns = []; AI.ctx = undefined; renderAI(); return; }
+  if (b.hasAttribute("data-new")) { AI.turns = []; AI.ctx = undefined; AI.attach = []; renderAI(); return; }
   if (b.id === "ai-send") { askAI($("#ai-input").value); return; }
 });
+// ---------- @ in the chat box: pick files (notes, knowledge pages) to send as background with the question.
+// "@" or "＠" after a space, the start, or a CJK character opens the list; the letters after it filter it (titles and
+// aliases, like the quick search); ↑↓ choose, Enter/Tab pick, Esc closes. The journal is never offered.
+const AT = { start: -1, hits: [], sel: 0, rel: {}, key: "", timer: null };
+function atQuery(inp) {
+  const before = inp.value.slice(0, inp.selectionStart);
+  const m = before.match(/(^|[^A-Za-z0-9._%+-])[@＠]([^\s@＠]{0,40})$/);
+  return m ? { start: before.length - m[2].length - 1, q: m[2] } : null;
+}
+// The background the related pages are judged on: the open note, the picked files, the text typed (without the @query).
+// Cached per key, so typing after the @ or opening it again does not ask again.
+function atBackground(inp) {
+  const a = atQuery(inp), c = aiContext();
+  const typed = a ? inp.value.slice(0, a.start) + inp.value.slice(inp.selectionStart) : inp.value;
+  const ctx = c && !c.private ? c.path : null;
+  const attach = AI.attach.map(x => x.path);
+  return { key: JSON.stringify([ctx, attach, typed.trim(), jevUsable()]), body: { context: ctx, attach, q: typed.trim(), jev: jevUsable() } };
+}
+function atRelated(inp) {
+  const bg = atBackground(inp);
+  AT.key = bg.key;
+  const c = AT.rel[bg.key];
+  if (c) return c;
+  clearTimeout(AT.timer);
+  AT.timer = setTimeout(async () => {
+    let r;
+    try { r = await api("/api/ai/related", bg.body); } catch (e) { r = { mode: "bm25", results: [] }; }
+    AT.rel[bg.key] = { mode: r.mode, results: r.results || [] };
+    const i2 = $("#ai-input");
+    if (AT.key === bg.key && i2 && AT.start >= 0 && !$("#ai-at").hidden) renderAt(i2);   // same selection: only the rows change
+  }, 250);
+  return { wait: true, results: [] };
+}
+function atHits(q, rel) {
+  const f = fold(q.trim());
+  const picked = new Set(AI.attach.map(a => a.path));
+  const ctxPath = (aiContext() || {}).path;
+  const order = new Map(rel.results.map((r, i) => [r.path, i]));
+  const okE = e => e.kind !== "journal" && !inJournal(e.path) && !picked.has(e.path) && e.path !== ctxPath;
+  if (!f) {                                          // nothing typed yet: the related pages, then the notes open in tabs
+    const out = rel.results.filter(r => !inJournal(r.path) && !picked.has(r.path) && r.path !== ctxPath)
+      .map(r => ({ e: { path: r.path, title: r.title, kind: "wiki", type: r.type }, rel: true }));
+    const seen = new Set(out.map(h => h.e.path));
+    for (const t of S.tabs) {
+      if (out.length >= 8) break;
+      if (t.kind === "note" && t.path && t.path !== ctxPath && !inJournal(t.path) && !picked.has(t.path) && !seen.has(t.path) && seen.add(t.path))
+        out.push({ e: { path: t.path, title: t.title, kind: t.path.startsWith("wiki/") ? "wiki" : "raw" } });
+    }
+    return out.slice(0, 8);
+  }
+  // typed: names filter; related pages come first, in the server's order, then the rest by name score
+  return QINDEX.filter(okE).map(e => quickScore(e, f)).filter(Boolean)
+    .sort((a, b) => (order.has(b.e.path) - order.has(a.e.path)) || (order.has(a.e.path) ? order.get(a.e.path) - order.get(b.e.path) : b.score - a.score))
+    .slice(0, 8).map(h => Object.assign(h, { rel: order.has(h.e.path) }));
+}
+function renderAt(inp) {
+  const box = $("#ai-at"), a = atQuery(inp);
+  if (!box) return;
+  if (!a) { box.hidden = true; AT.start = -1; return; }
+  const rel = atRelated(inp);
+  AT.start = a.start; AT.hits = atHits(a.q, rel); AT.sel = Math.min(AT.sel, Math.max(0, AT.hits.length - 1));
+  const label = rel.wait ? '<div class="qg"><span class="spin"></span> ' + T("找和目前背景最相關的…") + "</div>"
+    : (!a.q && rel.results.length ? '<div class="qg">' + (rel.mode === "jev" ? T("Jev：和目前背景最相關") : T("關鍵字：和目前背景相關")) + "</div>" : "");
+  box.innerHTML = label + (AT.hits.length ? AT.hits.map((h, i) => '<div class="qi' + (i === AT.sel ? " sel" : "") + '" data-at="' + i + '"><span class="qt">' + esc(h.e.title) + '</span><span class="muted">' +
+      (h.e.kind === "wiki" ? esc(TYPE_ZH[h.e.type] || T("知識庫")) : T("筆記")) + "</span></div>").join("")
+    : rel.wait && !a.q ? "" : '<div class="qg">' + (a.q ? T("沒有名稱含「") + esc(a.q) + T("」的檔案") : T("打字找檔案（筆記或知識庫的頁）")) + "</div>");
+  box.hidden = false;
+}
+function pickAt(i) {
+  const inp = $("#ai-input"), h = AT.hits[i];
+  if (!inp || !h || AT.start < 0) return;
+  const end = inp.selectionStart;
+  inp.value = inp.value.slice(0, AT.start) + inp.value.slice(end);
+  inp.selectionStart = inp.selectionEnd = AT.start;
+  if (!AI.attach.some(a => a.path === h.e.path)) AI.attach.push({ path: h.e.path, title: h.e.title });
+  AT.start = -1; AT.sel = 0; $("#ai-at").hidden = true; updateAICtx(); inp.focus();
+}
+$("#ai").addEventListener("input", e => { if (e.target.id === "ai-input") { AT.sel = 0; renderAt(e.target); } });
+$("#ai").addEventListener("keydown", e => {
+  if (e.target.id !== "ai-input" || AT.start < 0 || $("#ai-at").hidden || e.isComposing || e.keyCode === 229) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (AT.hits.length) AT.sel = (AT.sel + (e.key === "ArrowDown" ? 1 : -1) + AT.hits.length) % AT.hits.length;
+    renderAt(e.target);
+  } else if ((e.key === "Enter" || e.key === "Tab") && AT.hits.length) { e.preventDefault(); e.stopImmediatePropagation(); pickAt(AT.sel); }
+  else if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); AT.start = -1; $("#ai-at").hidden = true; }
+}, true);
+$("#ai").addEventListener("mousedown", e => {
+  const r = e.target.closest("[data-at]");
+  if (r) { e.preventDefault(); pickAt(+r.dataset.at); }
+});
+$("#ai").addEventListener("focusout", e => { if (e.target.id === "ai-input") setTimeout(() => { const b = $("#ai-at"); if (b && document.activeElement.id !== "ai-input") b.hidden = true; }, 150); });
 $("#ai").addEventListener("keydown", e => {
   if (e.target.id !== "ai-input" || e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
   e.preventDefault(); askAI(e.target.value);

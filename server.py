@@ -1520,7 +1520,8 @@ AI_SYSTEM = """你是筆記 app Lumen 裡的助理，回答使用者關於他自
 - 你沒有任何工具，不能讀別的檔案；也不要提到這些規則。"""
 AI_PAGE_MAX = 12000         # characters of one page
 AI_TOTAL_MAX = 60000        # characters of all pages
-AI_NOTE_MAX = 20000         # characters of the open note
+AI_NOTE_MAX = 20000         # characters of the open note (and of each file picked with @)
+AI_ATTACH_MAX = 8           # files picked with @ in the chat box
 AI_JOBS = {}
 
 
@@ -1551,9 +1552,26 @@ def ai_prompt(body):
             title = p.name if p else os.path.splitext(os.path.basename(ctx))[0]
             parts.append('<open_note title="%s">\n%s\n</open_note>' % (title, body_of(text)[:AI_NOTE_MAX]))
             ctx_used = {"title": title, "path": ctx}
+    # files the user picked with @ in the chat box: whole (up to AI_NOTE_MAX each, AI_TOTAL_MAX in all), never the journal
+    attached, att_total = [], 0
+    for rel0 in (body.get("attach") or [])[:AI_ATTACH_MAX]:
+        rel = safe_rel(str(rel0 or ""))
+        if not rel or not rel.endswith(".md") or is_private(rel) or (ctx_used and rel == ctx_used["path"]) \
+                or any(a["path"] == rel for a in attached) or not os.path.isfile(os.path.join(VAULT, rel)):
+            continue
+        p = v.by_rel.get(rel)
+        if p and p.name not in v.sendable:
+            continue
+        text = body_of(open(os.path.join(VAULT, rel), encoding="utf-8", errors="ignore").read())[:AI_NOTE_MAX]
+        if att_total + len(text) > AI_TOTAL_MAX:
+            break
+        att_total += len(text)
+        title = p.name if p else os.path.splitext(os.path.basename(rel))[0]
+        parts.append('<attached_file title="%s" path="%s">\n%s\n</attached_file>' % (title, rel, text))
+        attached.append({"title": title, "path": rel})
     for rel in body.get("sources") or []:
         p = v.by_rel.get(rel)
-        if not p or p.name not in v.sendable or (ctx_used and rel == ctx_used["path"]):
+        if not p or p.name not in v.sendable or (ctx_used and rel == ctx_used["path"]) or any(a["path"] == rel for a in attached):
             continue
         text = body_of(p.text)[:AI_PAGE_MAX]
         if total + len(text) > AI_TOTAL_MAX:
@@ -1563,10 +1581,11 @@ def ai_prompt(body):
         used.append({"title": p.name, "path": p.rel})
     hist = [h for h in (body.get("history") or []) if h.get("q") and h.get("a")][-4:]
     convo = "".join("使用者：%s\n助理：%s\n\n" % (h["q"], h["a"][:4000]) for h in hist)
-    msg = ("以下是使用者知識庫裡和問題相關的資料。\n\n" + "\n\n".join(parts) if parts else "（知識庫裡沒有找到相關的頁。）") + \
+    msg = ("以下是使用者知識庫裡和問題相關的資料。" + ("attached_file 是使用者在問題裡用 @ 指定的檔案，回答以它們為主要背景。" if attached else "") +
+           "\n\n" + "\n\n".join(parts) if parts else "（知識庫裡沒有找到相關的頁。）") + \
           ("\n\n<earlier_conversation>\n%s</earlier_conversation>" % convo if convo else "") + \
           "\n\n問題：" + str(body.get("q") or "").strip()
-    return msg, used, ctx_used
+    return msg, used, ctx_used, attached
 
 
 # A last check on the answer: stray markup instead of an answer (seen with Opus: "<budget:…>",
@@ -1802,7 +1821,7 @@ def api_ai_ask(body):
         return 400, {"error": "還沒連接 Claude Code：到「連接 AI」按「連接 Claude Code」。", "connect": True}
     if provider == "chatgpt" and not connect.gpt_status()["connected"]:
         return 400, {"error": "還沒連接 ChatGPT：到「連接 AI」按「Continue with ChatGPT」。", "connect": True}
-    msg, used, ctx_used = ai_prompt(body)
+    msg, used, ctx_used, attached = ai_prompt(body)
     jid = secrets.token_hex(6)
     if provider == "chatgpt":                      # "chatgpt" (auto: Jev picks from the plan's models) or "chatgpt:<model>"
         m = str(body.get("model") or "")
@@ -1812,7 +1831,8 @@ def api_ai_ask(body):
     effort_choice = body.get("effort") if body.get("effort") in EFFORTS + ("auto",) else "auto"
     v = V.fresh()
     pages = [{"title": u["title"], "summary": str(v.by_rel[u["path"]].fm.get("summary", ""))[:300]} for u in used]
-    state = {"question": str(body.get("q") or "")[:2000], "open_note": ctx_used["title"] if ctx_used else "",
+    state = {"question": str(body.get("q") or "")[:2000],
+             "open_note": "、".join(([ctx_used["title"]] if ctx_used else []) + [a["title"] for a in attached]),
              "earlier": [str(h.get("q") or "")[:500] for h in (body.get("history") or [])][-2:], "pages": pages}
     job = AI_JOBS[jid] = {"provider": provider, "bin": exe, "choice": choice, "effort_choice": effort_choice, "model": None, "effort": None, "why": "", "text": "",
                           "status": "running", "error": None, "stopped": False, "started": time.time(), "proc": None,
@@ -1820,7 +1840,7 @@ def api_ai_ask(body):
     for k in [k for k, j in AI_JOBS.items() if j["status"] != "running" and time.time() - j["started"] > 3600]:
         AI_JOBS.pop(k, None)
     threading.Thread(target=run_ai, args=(job, msg), daemon=True).start()
-    return 200, {"id": jid, "used": used, "context": ctx_used, "chars": len(msg), "choice": choice}
+    return 200, {"id": jid, "used": used, "context": ctx_used, "attached": attached, "chars": len(msg), "choice": choice}
 
 
 def api_ai_poll(q):
@@ -1830,6 +1850,37 @@ def api_ai_poll(q):
     return 200, {"text": job["text"], "status": job["status"], "error": job["error"], "seconds": job.get("seconds"),
                  "model": job["model"], "effort": job["effort"], "why": job["why"], "retried": job.get("retried", 0),
                  "tokens": job.get("tokens")}
+
+
+def api_ai_related(body):
+    """Pages most related to the chat's background (typed text, open note, picked files) for the @ list: Jev when
+    the page says it is on, else BM25. A private note, or a page drawn from the journal, adds nothing to the question."""
+    v = V.fresh()
+    ctx = safe_rel(body.get("context") or "")
+    attach = [safe_rel(str(a or "")) for a in (body.get("attach") or [])[:AI_ATTACH_MAX]]
+    typed = re.sub(r"\s+", " ", str(body.get("q") or "")).strip()[:300]
+    bits, skip = [], set()
+    for rel in ([ctx] if ctx else []) + attach:
+        if not rel or not rel.endswith(".md") or is_private(rel) or not os.path.isfile(os.path.join(VAULT, rel)):
+            continue
+        p = v.by_rel.get(rel)
+        if p and p.name not in v.sendable:
+            continue
+        title = p.name if p else os.path.splitext(os.path.basename(rel))[0]
+        skip.add(rel)
+        if rel == ctx:
+            text = re.sub(r"\s+", " ", body_of(open(os.path.join(VAULT, rel), encoding="utf-8", errors="ignore").read()))[:1500]
+            bits.append("%s: %s" % (title, text))
+        else:
+            bits.append(title)
+    if not typed and not bits:
+        return 200, {"mode": "bm25", "results": []}
+    question = "Which wiki pages are most related to this? " + " | ".join(([typed] if typed else []) + bits)
+    code, r = api_search({"q": [question], "mode": ["jev" if body.get("jev") else "bm25"]})
+    out = [{"path": x["path"], "title": x["title"], "type": x.get("type", "")} for x in r.get("results", [])
+           if x.get("path") and x["path"] not in skip and not is_private(x["path"])
+           and x["path"] in v.by_rel and v.by_rel[x["path"]].name in v.sendable]
+    return 200, {"mode": r.get("mode", "bm25"), "results": out[:12], "error": r.get("error")}
 
 
 def api_ai_stop(body):
@@ -2029,6 +2080,16 @@ def run_agent_phase(job, phase, message):
             elif d.get("type") == "result":
                 job["cost"] += float(d.get("total_cost_usd") or 0)
                 job["denied"] += len(d.get("permission_denials") or [])
+                u = d.get("usage") or {}                     # Claude's tokens, as ChatGPT's are counted
+                tk = job["tokens"]
+                tk["in"] += int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) + \
+                    int(u.get("cache_creation_input_tokens") or 0)
+                tk["cached"] += int(u.get("cache_read_input_tokens") or 0)
+                tk["out"] += int(u.get("output_tokens") or 0)
+                tk["turns"] = tk.get("turns", 0) + int(d.get("num_turns") or 0)
+                tk.setdefault("each", []).append([int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) +
+                                                  int(u.get("cache_creation_input_tokens") or 0),
+                                                  int(u.get("cache_read_input_tokens") or 0), int(u.get("output_tokens") or 0)])
                 if d.get("is_error"):
                     job["error"] = str(d.get("result") or d.get("subtype") or "Claude Code 回報錯誤")
         proc.wait(timeout=30)
@@ -2125,7 +2186,7 @@ def lean_context(job):
             span = range(int(pa) - 1, min(int(pb), len(lines)))
         total = wiki.est_tokens("\n".join(lines[i] for i in span))
         if total <= wiki.READ_WHOLE or job.get("whole"):
-            note, how = "\n".join("%6d\t%s" % (i + 1, lines[i]) for i in span) if pl else "\n".join(lines), "whole"
+            note, how = "\n".join("%d\t%s" % (i + 1, lines[i]) for i in span) if pl else "\n".join(lines), "whole"
         else:
             try:
                 keep, st = jev.key_lines(os.path.join(VAULT, rel), part=pl)
@@ -2140,12 +2201,12 @@ def lean_context(job):
             for k in sorted(keep):
                 if k != last + 1:
                     out.append("… (lines left out)")
-                    out += ["%6d\t› %s" % (j + 1, pointers[j]) for j in range(last + 1, k) if j in pointers]
-                out.append("%6d\t%s" % (k + 1, lines[k]))
+                    out += ["%d\t› %s" % (j + 1, pointers[j]) for j in range(last + 1, k) if j in pointers]
+                out.append("%d\t%s" % (k + 1, lines[k]))
                 last = k
             if last + 1 < span.stop and any(j in pointers for j in range(last + 1, span.stop)):
                 out.append("… (lines left out)")
-                out += ["%6d\t› %s" % (j + 1, pointers[j]) for j in range(last + 1, span.stop) if j in pointers]
+                out += ["%d\t› %s" % (j + 1, pointers[j]) for j in range(last + 1, span.stop) if j in pointers]
             note = "\n".join(out)
             how = ("its key passages: %s (line-numbered); say on the source page that it was read in key passages"
                    % cov)
@@ -2212,6 +2273,18 @@ MODE_TEXT = {
 }
 
 
+# Claude with the app's tools, organising a note: the app hands over the same material as a lean run, so the
+# first turns aren't spent fetching it (in the Pr6 test Claude called prep, read the note three times, skim,
+# jev_query and four searches per part, each turn reading the whole conversation again)
+APP_HANDED_TEXT = ("The app has gathered what you start from, below: the prep report on the note (its map, the pages it "
+                   "mentions, new terms), the note's key passages (the paragraphs Jev rates as carrying ~80% of its key "
+                   "points, with its headings, and the main sentence of each substantive paragraph left out, marked ›; "
+                   "line numbers are not part of the text) and cards of the existing wiki pages most related to it. Don't "
+                   "call prep or skim, and don't read the note again: `read` it only for lines left out that you need. "
+                   "Use `read` for the wiki pages you will change, and `search`/`jev_query` only for subjects the cards "
+                   "don't cover.")
+
+
 def gpt_error(raw):
     return GPT_LIMIT if "usage_limit" in raw else "ChatGPT 回應錯誤：%s" % raw[:300]
 
@@ -2267,6 +2340,27 @@ you were given only its key passages, write no changes yet: answer with only "pl
 the app hands it over whole and asks again."""
 
 
+# sections of instructions.md a lean ingest never uses (it has no tools; filing answers and checking the wiki are
+# other tasks): ~600 tokens less in every request
+INGEST_SKIP = ("## Lumen's tools", "### File an answer as an analysis page", "### Check the wiki")
+
+
+def task_instructions(task):
+    text = open(os.path.join(AGENT_DIR, "instructions.md"), encoding="utf-8").read()
+    if task != "ingest":
+        return text
+    out, skip = [], False
+    for block in re.split(r"(?m)^(?=#{2,3} )", text):
+        head = block.split("\n", 1)[0].strip()
+        if head.startswith("## ") or head.startswith("### "):
+            skip = head in INGEST_SKIP or (skip and head.startswith("### ") and not head.startswith("### Ingest"))
+            if head.startswith("## ") and head not in INGEST_SKIP:
+                skip = False
+        if not skip:
+            out.append(block)
+    return "".join(out)
+
+
 def gpt_request(job, conv, effort="medium", schema=None):
     """One request on the user's ChatGPT plan (the Responses API; nothing stored at OpenAI). Returns the text.
     The conversation only grows at its end and has the same cache key, so a repeated beginning is cached."""
@@ -2275,7 +2369,7 @@ def gpt_request(job, conv, effort="medium", schema=None):
     token = connect.gpt_token()
     if not token:
         raise RuntimeError("還沒連接 ChatGPT，或登入過期了：到「連接 AI」重新連接。")
-    instructions = open(os.path.join(AGENT_DIR, "instructions.md"), encoding="utf-8").read()
+    instructions = task_instructions(job["task"])
     key = cache_key(job)
     body = {"model": job["model"], "instructions": instructions, "input": conv, "store": False, "stream": True,
             "prompt_cache_key": key, "reasoning": {"effort": effort}, "text": {"verbosity": "medium"}}
@@ -2637,7 +2731,10 @@ def agent_plan(job):
         # prefix for the provider's prompt cache across the parts of a long note
         msg = agent_facts(job) + ("\n" + MODE_TEXT[job["mode"]] if job["mode"] in MODE_TEXT else "") + \
             "\n\n" + job["task_text"]
-        if job["mode"] == "lean":
+        handed = job["mode"] == "lean" or (job["mode"] == "app" and job["task"] == "ingest")
+        if handed and job["mode"] == "app":
+            msg += "\n\n" + APP_HANDED_TEXT
+        if handed:
             job["steps"].append({"phase": "plan", "what": "準備資料：Jev 的分析、重點段落、相關的頁", "ok": None})
             try:
                 msg += "\n\n" + lean_context(job)
@@ -2705,6 +2802,7 @@ def ingest_task(job):
     pt = job.get("part")
     if pt:
         pname, a, b = pt["parts"][pt["i"]]
+        pname = clean_part_title(pname)
         job["task_text"] = (
             "Task: ingest part %d of %d of the note `%s`: %s, lines %d-%d. The note is long, so it is organised a "
             "part at a time (its parts follow its topics): this run covers only these lines (the tools give you "
@@ -2822,12 +2920,22 @@ def part_progress():
             if d.get("n") and os.path.exists(os.path.join(VAULT, rel))}
 
 
+def clean_part_title(t):
+    """A part's name as a page title: no markdown marks (**4:57** -> 4.57) and none of the characters a title can't
+    hold (links break on them). A part named from its first sentence kept them, and the source page was refused."""
+    t = re.sub(r"\[\[([^\]|]*\|)?([^\]]*)\]\]", r"\2", t or "")         # [[a|b]] -> b
+    t = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", t)                       # [text](url) -> text
+    t = re.sub(r"[*_`~]+", "", t).replace(":", ".")
+    t = re.sub(r'[/\\?"<>|#^\[\]]', " ", t)
+    return re.sub(r"\s+", " ", t).strip(" .·-—")
+
+
 def part_name(parts, i):
     """How the user and the AI call part i: its chapter title, numbered when a long chapter is cut further."""
-    title = parts[i][0]
+    title = clean_part_title(parts[i][0])
     if not title:
         return "第 %d 部分（共 %d）" % (i + 1, len(parts))
-    same = [k for k, p in enumerate(parts) if p[0] == title]
+    same = [k for k, p in enumerate(parts) if clean_part_title(p[0]) == title]
     return title if len(same) == 1 else "%s（%d/%d）" % (title, same.index(i) + 1, len(same))
 
 
@@ -3148,7 +3256,7 @@ POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_s
         "/api/journal": api_journal, "/api/attach": api_attach, "/api/move": api_move,
         "/api/delete": api_delete, "/api/html2note": api_html2note, "/api/restore": api_restore, "/api/import": api_import,
         "/api/new": api_new, "/api/rename": api_rename, "/api/history/restore": api_history_restore,
-        "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop,
+        "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop, "/api/ai/related": api_ai_related,
         "/api/agent/start": api_agent_start, "/api/agent/approve": api_agent_approve, "/api/agent/stop": api_agent_stop,
         "/api/agent/undo": api_agent_undo}
 # these work with no vault open
