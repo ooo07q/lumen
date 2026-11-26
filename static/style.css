@@ -536,3 +536,10 @@ h1.renamable:hover { background: var(--panel); }
 .meta .tag { color: var(--accent); }
 @media (max-width: 700px) { .pp-row { grid-template-columns: 70px 1fr 20px; } }
 .pp-in.pp-wl { color: var(--accent); }
+
+/* "Jev 是什麼？": a short plain explanation, folded until asked */
+details.what { font-size: 12px; color: var(--muted); margin: 4px 0 10px; }
+details.what summary { cursor: pointer; color: var(--accent, inherit); list-style: none; }
+details.what summary::-webkit-details-marker { display: none; }
+details.what summary::before { content: "? "; font-weight: 600; }
+details.what p { margin: 6px 0 0; line-height: 1.6; }

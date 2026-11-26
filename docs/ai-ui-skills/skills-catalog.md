@@ -20,15 +20,18 @@ Emil Kowalski 的 AI UI skills，依兩個網站整理，資料讀取日期 2026
 
 ## 總表
 
-安裝狀態：本專案（`~/Lumen`）和使用者的 `~/.claude/skills/` 目前都**沒有安裝**任何一個（2026-11-26 檢查）。
+安裝狀態（2026-11-27）：第一批 4 個已裝在使用者目錄 `~/.claude/skills/`，只給 Claude Code；本專案（`~/Lumen`）沒有裝任何 skill。
+- 指令：`DISABLE_TELEMETRY=1 npx skills@latest add emilkowalski/skills --skill emil-design-eng --skill review-animations --skill animation-vocabulary --skill ask-emil -a claude-code -g -y`（CLI 1.9.0）
+- 版本：GitHub commit `64eb3deb9a5fbfa041faf783e0bc3fd635872e9c`（2026-11-15）。裝好的檔案和 repo 內容逐檔相同。
+- 寫入：`~/.claude/skills/<名稱>/`（直接複製，不是 symlink）；全域鎖定檔 `~/.agents/.skill-lock.json`（記錄來源、commit、資料夾雜湊）。另有 npx 的套件快取。
 
 | Skill | 來源 | 分類（A） | 用途 | 適合任務 | 不適合任務 | 範例 prompt | 輸出／影響範圍 | 安裝狀態 | 備註 |
 |---|---|---|---|---|---|---|---|---|---|
-| animation-vocabulary | S、A | 01 Before you build | 把模糊描述對到動畫的正確術語 | 會描述效果但不知道叫什麼 | 設計或實作動畫（SKILL.md：「For naming an effect, not designing or building one」） | `/animation-vocabulary the thing where the button shrinks a bit when you click it` | 只回文字，不改檔 | 未安裝 | SKILL.md 全文已讀；只用內建詞彙表 |
+| animation-vocabulary | S、A | 01 Before you build | 把模糊描述對到動畫的正確術語 | 會描述效果但不知道叫什麼 | 設計或實作動畫（SKILL.md：「For naming an effect, not designing or building one」） | `/animation-vocabulary the thing where the button shrinks a bit when you click it` | 只回文字，不改檔 | 已安裝（2026-11-27），測過 | SKILL.md 全文已讀；只用內建詞彙表 |
 | pick-ui-library | S、A | 01 Before you build | 從作者的精選清單挑一個函式庫 | 元件要自己寫還是用套件 | 清單外的需求（會說明並改用一般知識） | `/pick-ui-library the price needs to animate when it changes, what should I install?` | 建議；被要求時會安裝並接上 | 未安裝 | 先讀 `package.json`；`disable-model-invocation: true`（只能手動呼叫） |
 | prototype | S、A | 01 Before you build | 同一塊 UI 做幾個不同版本，用切換器比較 | 探索階段，要在真的 app 裡比較 | 審查現有 UI、規劃修正、選套件（S） | `/prototype try three different directions for the download button` | 新增路由與切換器；選定後實作該版並移除原型 | 未安裝 | 每個版本放在自己的路由（A） |
-| ask-emil | S、A | 01 Before you build | 依情況推薦一個 skill 或一串順序 | 知道要做什麼，不知道用哪個 skill | 待確認 | `/ask-emil I just built a settings page, what should I check before shipping?` | 只回建議 | 未安裝 | 推薦前先讀各 skill 的 SKILL.md（S） |
-| emil-design-eng | S、A | 02 Building the interface | 主 skill：作者的設計工程想法，以動畫為主 | 不確定用哪個 skill 時 | 有專門 skill 的任務（A：專門 skill「better at specific tasks」） | `/emil-design-eng make this button feel more responsive` | 修改程式碼，附 Before／After／Why 表 | 未安裝 | S 的 Snyk 稽核為 Warn |
+| ask-emil | S、A | 01 Before you build | 依情況推薦一個 skill 或一串順序 | 知道要做什麼，不知道用哪個 skill | 待確認 | `/ask-emil I just built a settings page, what should I check before shipping?` | 只回建議 | 已安裝（2026-11-27），只能手動 `/ask-emil` | 推薦前先讀各 skill 的 SKILL.md（S） |
+| emil-design-eng | S、A | 02 Building the interface | 主 skill：作者的設計工程想法，以動畫為主 | 不確定用哪個 skill 時 | 有專門 skill 的任務（A：專門 skill「better at specific tasks」） | `/emil-design-eng make this button feel more responsive` | 修改程式碼，附 Before／After／Why 表 | 已安裝（2026-11-27），測過 | S 的 Snyk 稽核為 Warn |
 | animate | S、A | 02 Building the interface | 從零做一個動畫，依序決定要不要動、用什麼、屬性、曲線、時長 | 要讓某個元素動起來 | 稽核整個程式碼、審 diff、找機會、React Native（S） | `/animate animate this dropdown so it opens from the button` | 動畫程式碼 | 未安裝 | 工具在 CSS transition、keyframes、WAAPI、Motion 間選；S 的 Snyk 為 Warn |
 | choreograph | S、A | 02 Building the interface | 協調好幾個一起動的元素 | 列表錯開、hero 動畫、刪除項目後其他項目補位 | 單一動畫的曲線與時長（屬 animate，S） | `/choreograph when I delete a card from this list the others jump into place. Fix it` | 修改時序 | 未安裝 | 錯開每個元素 30–80ms、總長約 300ms 內（A） |
 | apple-design | S、A | 02 Building the interface | 把 Apple WWDC 的介面與流暢動態原則轉成網頁做法 | 想讓產品像 Apple 生態系的一部分 | 待確認 | `/apple-design what spring should I use for this drawer` | 修改程式碼 | 未安裝 | 主要依據 WWDC 2018「Designing Fluid Interfaces」（S） |
@@ -36,7 +39,7 @@ Emil Kowalski 的 AI UI skills，依兩個網站整理，資料讀取日期 2026
 | mobile-native | S、A | 02 Building the interface | 修掉網頁在手機上像網站不像 app 的小問題 | 手機或觸控裝置的體驗 | 設計或審查動畫、React Native（S） | `/mobile-native the page zooms in when I focus the email input` | 修改程式碼；說明哪些修正從程式碼可驗證、哪些要真機 | 未安裝 | 有「symptom table」對照症狀 |
 | animation-performance | S、A | 03 Refining and reviewing | 讓動畫維持每秒 60 幀 | 動畫有效能問題 | 選曲線與時長、判斷該不該動、RN 執行緒（S） | `/animation-performance this sidebar animation is janky on my phone` | 修改程式碼 | 未安裝 | 先找掉幀原因再改程式（A） |
 | break-ui | S、A | 03 Refining and reviewing | 用最壞情況的資料測 UI | 上線前測新功能 | 重新設計元件、評品味、審動畫（S） | `/break-ui try to break the member row in the team settings` | 報告、「Demo data / Worst case」切換、逐項修正 | 未安裝 | 會加入測試資料與切換器 |
-| review-animations | S、A | 03 Refining and reviewing | 依作者規則嚴格審查動畫，最後給 Approve 或 Block | 合併或發 PR 前 | 寫功能、修無關 bug、審非動畫程式碼（S） | `/review-animations check the motion in src/components/dialog.tsx` | 審查報告（每項附檔名:行號與數值），不改檔 | 未安裝 | 規則在 STANDARDS.md（沒讀到），以「The Ten Non-Negotiable Standards」為核心 |
+| review-animations | S、A | 03 Refining and reviewing | 依作者規則嚴格審查動畫，最後給 Approve 或 Block | 合併或發 PR 前 | 寫功能、修無關 bug、審非動畫程式碼（S） | `/review-animations check the motion in src/components/dialog.tsx` | 審查報告（每項附檔名:行號與數值），不改檔 | 已安裝（2026-11-27），只能手動 `/review-animations` | 規則在 STANDARDS.md（沒讀到），以「The Ten Non-Negotiable Standards」為核心 |
 | find-animation-opportunities | S、A | 04 Looking at the whole app | 找出真正需要動畫的地方，也列出不該動的 | 隨時；稽核整個 app | 審查現有動畫、規劃修正、實作（S） | `/find-animation-opportunities what should and shouldn't animate in our dashboard` | 唯讀建議（A：「It's read-only」） | 未安裝 | S：「Expect to reject most candidate」 |
 | improve-animations | S、A | 04 Looking at the whole app | 稽核全部動畫，寫成有優先順序、可交給其他 agent 執行的計畫 | 想改善整個 app 的動態 | 審單一 diff（屬 review-animations）、自己實作（S） | `/improve-animations survey this app and write plans I can hand off` | 計畫；交出計畫前不改原始碼 | 未安裝 | 計畫存在哪裡：待確認 |
 | remove-animations | S、A | 04 Looking at the whole app | 移除或縮短不必要的動畫 | 動畫太多、app 感覺慢 | 新增動畫（S） | `/remove-animations the app feels slow, find the animations we don't need` | 移除或縮短動畫，列出保留項與原因 | 未安裝 | S：動畫能銜接突兀變化時，全刪是錯的 |

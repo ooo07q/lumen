@@ -1,7 +1,8 @@
 // Lumen's interface languages. The text in app.js and index.html is Traditional Chinese; T() gives it in the
-// chosen language: Simplified Chinese by character table, English from LUMEN_EN (i18n-en.js). The default is the
-// system's language; a choice made in the menu is remembered in this browser.
-const LANGS = { "zh-Hant": "繁體中文", "zh-Hans": "简体中文", en: "English" };
+// chosen language: Simplified Chinese by character table; English, Japanese and Korean from LUMEN_EN, LUMEN_JA and
+// LUMEN_KO (i18n-en.js, i18n-ja.js, i18n-ko.js; a string missing in Japanese or Korean shows in English). The default
+// is the system's language; a choice made in the menu is remembered in this browser.
+const LANGS = { "zh-Hant": "繁體中文", "zh-Hans": "简体中文", en: "English", ja: "日本語", ko: "한국어" };
 
 function systemLang() {
   for (const l of navigator.languages || [navigator.language || ""]) {
@@ -9,6 +10,8 @@ function systemLang() {
     if (/^zh-(tw|hk|mo)|^zh-hant/.test(s)) return "zh-Hant";
     if (s.startsWith("zh")) return "zh-Hans";
     if (s.startsWith("en")) return "en";
+    if (s.startsWith("ja")) return "ja";
+    if (s.startsWith("ko")) return "ko";
   }
   return "en";
 }
@@ -33,42 +36,50 @@ if (LANG === "zh-Hans") {
 }
 const toHans = s => { if (!T2S_UI) return s; let o = ""; for (const c of s) o += T2S_UI[c] || c; return o; };
 
-// English messages with %s / %d holes (from the server) as patterns, longest first.
-const EN_PATTERNS = typeof LUMEN_EN === "undefined" ? [] : Object.keys(LUMEN_EN).filter(k => /%[sd]/.test(k)).map(k => {
+// The dictionary for the chosen language; Japanese and Korean fall back to English for a string they lack.
+const DICT_OWN = LANG === "en" ? LUMEN_EN : LANG === "ja" && typeof LUMEN_JA !== "undefined" ? LUMEN_JA
+  : LANG === "ko" && typeof LUMEN_KO !== "undefined" ? LUMEN_KO : null;
+const USE_DICT = !!DICT_OWN || LANG === "ja" || LANG === "ko";
+const look = s => DICT_OWN && DICT_OWN[s] !== undefined ? DICT_OWN[s] : LUMEN_EN[s];
+
+// Messages with %s / %d holes (from the server) as patterns, longest first.
+const KEYS = typeof LUMEN_EN === "undefined" ? [] : Object.keys(LUMEN_EN);
+const EN_PATTERNS = KEYS.filter(k => /%[sd]/.test(k)).map(k => {
   const re = new RegExp("^" + k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%[sd]/g, "([\\s\\S]*?)") + "$");
-  return [re, LUMEN_EN[k]];
+  return [re, k];
 });
-const EN_PIECES = typeof LUMEN_EN === "undefined" ? [] : Object.keys(LUMEN_EN).filter(k => k.length >= 2 && !/%[sd]|[<>"=]/.test(k))
-  .sort((a, b) => b.length - a.length);
-const PUNCT = { "；": "; ", "：": ": ", "、": ", ", "「": "“", "」": "”", "（": " (", "）": ")", "，": ", ", "。": ". " };
+const EN_PIECES = KEYS.filter(k => k.length >= 2 && !/%[sd]|[<>"=]/.test(k)).sort((a, b) => b.length - a.length);
+// Chinese punctuation left between translated pieces: Western forms for English and Korean, Japanese keeps its own.
+const PUNCT = LANG === "ja" ? { "；": "；", "：": "：", "、": "、", "「": "「", "」": "」", "（": "（", "）": "）", "，": "、", "。": "。" }
+  : { "；": "; ", "：": ": ", "、": ", ", "「": "“", "」": "”", "（": " (", "）": ")", "，": ", ", "。": ". " };
 
 function T(s) {
   if (LANG === "zh-Hant" || typeof s !== "string" || !s) return s;
   if (LANG === "zh-Hans") return toHans(s);
-  const v = LUMEN_EN[s];
+  const v = look(s);
   return v === undefined ? s : v;
 }
 // A message from the server (an error, a step, a reason): whole message, then a pattern, then known pieces.
 function TS(s) {
-  if (LANG !== "en" || typeof s !== "string" || !s || !/[\u3000-\u9fff\uff00-\uffef]/.test(s)) return LANG === "zh-Hans" ? toHans(s || "") : s;
-  if (LUMEN_EN[s] !== undefined) return LUMEN_EN[s];
-  for (const [re, en] of EN_PATTERNS) {
+  if (!USE_DICT || typeof s !== "string" || !s || !/[\u3000-\u9fff\uff00-\uffef]/.test(s)) return LANG === "zh-Hans" ? toHans(s || "") : s;
+  if (look(s) !== undefined) return look(s);
+  for (const [re, k] of EN_PATTERNS) {
     const m = s.match(re);
-    if (m) { let i = 1; return en.replace(/%[sd]/g, () => TS(m[i++] || "")); }
+    if (m) { let i = 1; return look(k).replace(/%[sd]/g, () => TS(m[i++] || "")); }
   }
   let o = s;
-  for (const k of EN_PIECES) if (o.includes(k)) o = o.split(k).join(LUMEN_EN[k]);
+  for (const k of EN_PIECES) if (o.includes(k)) o = o.split(k).join(look(k));
   return o.replace(/[；：、「」（），。]/g, c => PUNCT[c]).replace(/ +\)/g, ")").replace(/\s+$/, "");
 }
 
 // Journal headings: "2026 年 11 月", "26 日　星期四" in Chinese; the locale's own form otherwise.
 function monthLabel(y, m) {
-  if (LANG !== "en") return y + T(" 年 ") + m + T(" 月");
-  return new Date(y, m - 1, 1).toLocaleDateString("en", { year: "numeric", month: "long" });
+  if (!USE_DICT) return y + T(" 年 ") + m + T(" 月");
+  return new Date(y, m - 1, 1).toLocaleDateString(LANG, { year: "numeric", month: "long" });
 }
 function dayLabel(y, m, d, week) {
-  if (LANG !== "en") return d + T(" 日　星期") + week;
-  return new Date(y, m - 1, d).toLocaleDateString("en", { weekday: "short", day: "numeric" });
+  if (!USE_DICT) return d + T(" 日　星期") + week;
+  return new Date(y, m - 1, d).toLocaleDateString(LANG, { weekday: "short", day: "numeric" });
 }
 
 // The page's own text (index.html), before app.js draws anything.

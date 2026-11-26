@@ -592,6 +592,21 @@ def has_jev():
     return bool(os.environ.get("TYPESAFE_API_KEY") or os.path.exists(jev.KEY_FILE)) and not connect.is_off("jev")
 
 
+def jev_paused():
+    """The Jev switch above the file list (off = nothing goes to Jev, the background ranking included). Until the
+    page has told the app where the switch stands (it used to live only in the browser), count it as off."""
+    return load_settings().get("jev_paused", True) is not False
+
+
+def api_jev_pause(body):
+    s = load_settings()
+    s["jev_paused"] = bool(body.get("paused"))
+    save_settings(s)
+    if not s["jev_paused"]:
+        background_tidy(force=True)            # rank the notes that waited while it was off
+    return 200, {"ok": True}
+
+
 def api_tree(q):
     v = V.fresh()
     v.images = attachment_map()          # attachments added in Finder or Obsidian show up without a restart
@@ -622,7 +637,7 @@ def api_tree(q):
             "images": v.images, "journal": journal_dir(), "assets": os.path.relpath(ASSETS, VAULT),
             "attach_to": os.path.relpath(ATTACH_DIR, VAULT),
             "notes_root": wiki.RAW_REL, "read_only": READ_ONLY, "protected": PROTECTED, "vault_path": VAULT,
-            "jev": has_jev()}
+            "jev": has_jev(), "jev_paused": load_settings().get("jev_paused")}
 
 
 def api_note(q):
@@ -711,7 +726,7 @@ def api_panel(q):
         else:
             out["organized"] = None
             tri = v.triage.get(rel) or v.triage.get(os.path.dirname(rel))
-            out["triage"] = {k: tri.get(k) for k in ("decision", "priority", "judged")} if tri else None
+            out["triage"] = {k: tri.get(k) for k in ("decision", "priority", "judged", "relevance", "substance", "essays")} if tri else None
             sure, unsure, stale = [], 0, 0
         out["recorded"] = []
     else:
@@ -870,7 +885,7 @@ def background_tidy(force=False):
             return
         _BG["running"], _BG["last"] = True, time.time()
     tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
-    cmd = [sys.executable, os.path.join(tools, "jev.py"), "triage"] if has_jev() else \
+    cmd = [sys.executable, os.path.join(tools, "jev.py"), "triage"] if has_jev() and not jev_paused() else \
           [sys.executable, os.path.join(tools, "wiki.py"), "status", "-n", "0"]
     env = dict(os.environ)                     # LUMEN_VAULT / LUMEN_DATA of the vault open now
 
@@ -920,7 +935,7 @@ def api_queue(q):
         pdf_todo, pdf_failed = wiki.waiting_pdfs()
     except Exception:                                  # noqa: BLE001 - the list works without it
         pdf_todo, pdf_failed = [], []
-    return 200, {"units": rows, "judged": len(v.triage), "ranking": _BG["running"] and has_jev(),
+    return 200, {"units": rows, "judged": len(v.triage), "ranking": _BG["running"] and has_jev() and not jev_paused(),
                  "pdfs": {"waiting": len(pdf_todo), "failed": [f for f, _ in pdf_failed][:20], "tool": bool(pdf_tool()),
                           "setup": _PDFSETUP["status"], "error": _PDFSETUP["error"],
                           "converting": _BG["running"] and bool(pdf_todo)}}
@@ -1698,7 +1713,10 @@ def run_once(job, msg, cwd):
                     return "retry"
             if ev.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
                 job["text"] += delta.get("text", "")
+        elif d.get("type") == "rate_limit_event":
+            quota_from_claude(job, d)
         elif d.get("type") == "result":
+            claude_tokens(job, d.get("usage") or {})
             if d.get("is_error"):
                 job["error"] = str(d.get("result") or d.get("subtype") or "Claude Code 回報錯誤")
             elif d.get("result"):
@@ -1708,6 +1726,52 @@ def run_once(job, msg, cwd):
         err = (proc.stderr.read() or "").strip()
         job["error"] = err[-400:] or "Claude Code 結束時出錯（代碼 %s）" % proc.returncode
     return "junk" if not job["stopped"] and not job["error"] and JUNK.search(job["text"][:300]) else "ok"
+
+
+def note_quota(job, window, pct):
+    """How much of the subscription's usage window is used, in %, as Claude Code or ChatGPT reports it during a run:
+    the first and the latest value ("5h" = the five-hour window, "week" = the weekly one)."""
+    try:
+        pct = round(float(pct), 1)
+    except (TypeError, ValueError):
+        return
+    q = job.setdefault("quota", {})
+    if window in q:
+        q[window]["end"] = pct
+    else:
+        q[window] = {"start": pct, "end": pct}
+
+
+def quota_from_claude(job, d):
+    """Claude Code's stream-json rate_limit_event: utilization 0–1 per window."""
+    wins = (d.get("rate_limit_info") or {}).get("unifiedWindows") or {}
+    for name, key in (("five_hour", "5h"), ("seven_day", "week")):
+        u = (wins.get(name) or {}).get("utilization")
+        if u is not None:
+            note_quota(job, key, float(u) * 100)
+
+
+def quota_from_gpt(job, headers):
+    """ChatGPT's response headers: x-codex-primary/secondary-used-percent with each window's length in minutes."""
+    for which in ("primary", "secondary"):
+        pct, mins = headers.get("x-codex-%s-used-percent" % which), headers.get("x-codex-%s-window-minutes" % which)
+        if pct is None:
+            continue
+        try:
+            note_quota(job, "5h" if mins and int(mins) <= 600 else "week", pct)
+        except ValueError:
+            pass
+
+
+def claude_tokens(job, u):
+    """Add a Claude Code result's usage to the job's token counts (as ChatGPT's are counted)."""
+    tk = job.setdefault("tokens", {"in": 0, "out": 0, "cached": 0})
+    for k in ("in", "out", "cached"):
+        tk[k] = tk.get(k) or 0
+    tk["in"] += int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) + \
+        int(u.get("cache_creation_input_tokens") or 0)
+    tk["cached"] += int(u.get("cache_read_input_tokens") or 0)
+    tk["out"] += int(u.get("output_tokens") or 0)
 
 
 GPT_LIMIT = "你的 ChatGPT 方案用量到上限了，等額度重置，或到 ChatGPT 設定查看：https://chatgpt.com/settings/usage"
@@ -1745,6 +1809,7 @@ def run_chatgpt(job, msg):
                                           "Accept": "text/event-stream"})
     try:
         r = urllib.request.urlopen(req, timeout=300, context=connect._ssl())
+        quota_from_gpt(job, r.headers)
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")
         if "usage_limit" in raw:
@@ -1849,7 +1914,10 @@ def api_ai_poll(q):
         return 404, {"error": "沒有這個回答"}
     return 200, {"text": job["text"], "status": job["status"], "error": job["error"], "seconds": job.get("seconds"),
                  "model": job["model"], "effort": job["effort"], "why": job["why"], "retried": job.get("retried", 0),
-                 "tokens": job.get("tokens")}
+                 "tokens": job.get("tokens"), "quota": job.get("quota")}
+
+
+RELATED_STOP = {"the", "and", "for", "with", "from", "that", "this", "are", "was", "but", "not", "its", "library"}
 
 
 def api_ai_related(body):
@@ -1859,6 +1927,7 @@ def api_ai_related(body):
     ctx = safe_rel(body.get("context") or "")
     attach = [safe_rel(str(a or "")) for a in (body.get("attach") or [])[:AI_ATTACH_MAX]]
     typed = re.sub(r"\s+", " ", str(body.get("q") or "")).strip()[:300]
+    find = re.sub(r"\s+", " ", str(body.get("find") or "")).strip()[:80]     # the words after @
     bits, skip = [], set()
     for rel in ([ctx] if ctx else []) + attach:
         if not rel or not rel.endswith(".md") or is_private(rel) or not os.path.isfile(os.path.join(VAULT, rel)):
@@ -1869,17 +1938,42 @@ def api_ai_related(body):
         title = p.name if p else os.path.splitext(os.path.basename(rel))[0]
         skip.add(rel)
         if rel == ctx:
-            text = re.sub(r"\s+", " ", body_of(open(os.path.join(VAULT, rel), encoding="utf-8", errors="ignore").read()))[:1500]
-            bits.append("%s: %s" % (title, text))
+            # Jev reads a question, so it gets the opening of the note; BM25 counts words, and a long passage drowns
+            # the few that matter, so it gets the names: the title and the folder (a book's title for a chapter)
+            if body.get("jev"):
+                text = re.sub(r"\s+", " ", body_of(open(os.path.join(VAULT, rel), encoding="utf-8", errors="ignore").read()))[:1500]
+                bits.append("%s: %s" % (title, text))
+            else:
+                folder = re.sub(r"_?\(Z-Library\)", "", os.path.basename(os.path.dirname(rel)))   # a download site's tag
+                bits.append(title if folder in ("", "raw", "wiki") or "/" not in rel else "%s %s" % (folder, title))
         else:
             bits.append(title)
-    if not typed and not bits:
+    if not typed and not bits and not find:
         return 200, {"mode": "bm25", "results": []}
-    question = "Which wiki pages are most related to this? " + " | ".join(([typed] if typed else []) + bits)
+    if find and not body.get("jev"):
+        question = find                        # keywords: the words alone (a long background would drown them)
+    elif find:
+        question = "The user is looking for a page about \"%s\". Which wiki pages fit that best, given what they " \
+            "are working on: %s" % (find, " | ".join(([typed] if typed else []) + bits) or "(nothing open)")
+    else:
+        question = " | ".join(([typed] if typed else []) + bits)
+        if body.get("jev"):
+            question = "Which wiki pages are most related to this? " + question
     code, r = api_search({"q": [question], "mode": ["jev" if body.get("jev") else "bm25"]})
-    out = [{"path": x["path"], "title": x["title"], "type": x.get("type", "")} for x in r.get("results", [])
+    out = [{"path": x["path"], "title": x["title"], "type": x.get("type", ""), "score": x.get("score")} for x in r.get("results", [])
            if x.get("path") and x["path"] not in skip and not is_private(x["path"])
-           and x["path"] in v.by_rel and v.by_rel[x["path"]].name in v.sendable]
+           and x["path"] in v.by_rel and v.by_rel[x["path"]].name in v.sendable
+           # Jev: only pages it doesn't call unrelated; the keyword pages query adds pick rare strings out of a long
+           # passage here, mostly by chance
+           and (r.get("mode") != "jev" or (not x.get("bm25") and (x.get("score") or 0) > 0.2))]
+    if r.get("mode") != "jev":
+        # BM25 also counts single Chinese characters; a page that shares no whole word or two-character term with
+        # the question isn't related, it only shares letters
+        def strong(t):
+            return {w for w in wiki.tokenize(t) if (len(w) >= 3 and w.isascii() and w not in RELATED_STOP)
+                    or (len(w) == 2 and not w.isascii())}
+        want = strong(question)
+        out = [x for x in out if want & strong(" ".join([v.by_rel[x["path"]].name, v.by_rel[x["path"]].text]))]
     return 200, {"mode": r.get("mode", "bm25"), "results": out[:12], "error": r.get("error")}
 
 
@@ -2077,6 +2171,8 @@ def run_agent_phase(job, phase, message):
                         it = pending.pop(b["tool_use_id"])
                         it["ok"] = not b.get("is_error")
                         it["secs"] = round(time.time() - it.get("t0", time.time()), 1)
+            elif d.get("type") == "rate_limit_event":
+                quota_from_claude(job, d)
             elif d.get("type") == "result":
                 job["cost"] += float(d.get("total_cost_usd") or 0)
                 job["denied"] += len(d.get("permission_denials") or [])
@@ -2380,6 +2476,7 @@ def gpt_request(job, conv, effort="medium", schema=None):
                                           "Accept": "text/event-stream", "session_id": key})
     try:
         r = urllib.request.urlopen(req, timeout=300, context=connect._ssl())   # a stalled stream fails in 5 min
+        quota_from_gpt(job, r.headers)
     except urllib.error.HTTPError as e:
         raise RuntimeError(gpt_error(e.read().decode("utf-8", "replace")))
     job["proc"] = r
@@ -2605,6 +2702,7 @@ def run_gpt_agent_phase(job, phase, message):
                                                   "Accept": "text/event-stream"})
             try:
                 r = urllib.request.urlopen(req, timeout=600, context=connect._ssl())
+                quota_from_gpt(job, r.headers)
             except urllib.error.HTTPError as e:
                 raise RuntimeError(gpt_error(e.read().decode("utf-8", "replace")))
             job["proc"] = r
@@ -2735,7 +2833,7 @@ def agent_plan(job):
         if handed and job["mode"] == "app":
             msg += "\n\n" + APP_HANDED_TEXT
         if handed:
-            job["steps"].append({"phase": "plan", "what": "準備資料：Jev 的分析、重點段落、相關的頁", "ok": None})
+            job["steps"].append({"phase": "plan", "what": "準備資料：請 Jev 挑出重點段落、找出相關的頁", "ok": None})
             try:
                 msg += "\n\n" + lean_context(job)
                 job["steps"][-1]["ok"] = True
@@ -2827,7 +2925,7 @@ def ingest_task(job):
 def choose_part(job):
     """Plan thread, before anything else: is the note organised a part at a time, and which part is this run?"""
     rel = job["path"]
-    job["steps"].append({"phase": "plan", "what": "判斷這篇要不要分部分整理、從哪裡分" + ("（Jev 看重點和段落主題）" if job["jev"] else ""), "ok": None})
+    job["steps"].append({"phase": "plan", "what": "判斷這篇要不要分部分整理、從哪裡分" + ("（Jev 依重點和段落的主題來分）" if job["jev"] else ""), "ok": None})
     try:
         parts = note_parts(rel, job["jev"])
         job["steps"][-1]["ok"] = True
@@ -3020,7 +3118,7 @@ class StepList(list):
 
 def agent_view(job):
     keys = ("id", "task", "label", "model", "effort", "jev", "status", "steps", "message", "plan", "report",
-            "changes", "outside", "error", "cost", "denied", "undone", "seconds", "provider", "mode", "tokens")
+            "changes", "outside", "error", "cost", "denied", "undone", "seconds", "provider", "mode", "tokens", "quota")
     out = {k: job.get(k) for k in keys}
     if job["status"] in ("planning", "acting"):
         out["live"] = job["text"]
@@ -3256,7 +3354,7 @@ POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_s
         "/api/journal": api_journal, "/api/attach": api_attach, "/api/move": api_move,
         "/api/delete": api_delete, "/api/html2note": api_html2note, "/api/restore": api_restore, "/api/import": api_import,
         "/api/new": api_new, "/api/rename": api_rename, "/api/history/restore": api_history_restore,
-        "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop, "/api/ai/related": api_ai_related,
+        "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop, "/api/ai/related": api_ai_related, "/api/jev/pause": api_jev_pause,
         "/api/agent/start": api_agent_start, "/api/agent/approve": api_agent_approve, "/api/agent/stop": api_agent_stop,
         "/api/agent/undo": api_agent_undo}
 # these work with no vault open

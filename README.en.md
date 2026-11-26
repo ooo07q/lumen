@@ -36,7 +36,7 @@ A PDF has to become a note before it can be organised. The first time you add on
 notes and it downloads the converter ([uv](https://docs.astral.sh/uv/), into Lumen's own folder; a minute or two, once).
 After that, PDFs are converted automatically.
 
-The interface comes in English, 繁體中文 and 简体中文, following the system language; switch it from the menu under the
+The interface comes in English, 繁體中文, 简体中文, 日本語 and 한국어, following the system language; switch it from the menu under the
 vault's name at the top left.
 
 ## Connecting an AI

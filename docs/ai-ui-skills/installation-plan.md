@@ -1,6 +1,6 @@
 # 安裝計畫
 
-只是計畫。到 2026-11-26 為止，什麼都沒裝，任何設定也都沒改。
+2026-11-27 已照第 1 節的指令裝好第一批（第 9 節）。實際寫入的位置見第 4 節的「實際結果」；第二批之後還沒裝。
 
 **已決定（2026-11-26）**：
 - 裝在使用者目錄 `~/.claude/skills/`（`-g`），不裝進 Lumen 專案。
@@ -71,6 +71,12 @@ DISABLE_TELEMETRY=1 npx skills@latest add emilkowalski/skills \
 - `--copy` 會改用複製，不建立 symlink（「Copy files instead of symlinking」）。
 - 用 `-g` 時，主副本放在哪裡、是否也是 symlink，文件沒寫清楚，待確認。裝完用 `ls -la ~/.claude/skills/` 看。
 - 安裝本身不會改 `CLAUDE.md`、`AGENTS.md` 或 `settings.json`，文件沒提到會改。
+- **實際結果（2026-11-27，CLI 1.9.0，`-g -a claude-code`）**：
+  - 只給 Claude Code 時是直接複製（`copied`），沒有建立 `~/.agents/skills/` 主副本，也沒有 symlink。
+  - 寫入 `~/.claude/skills/<名稱>/`（SKILL.md，review-animations 另有 STANDARDS.md）。
+  - 全域鎖定檔是 `~/.agents/.skill-lock.json`，記錄來源、commit、資料夾雜湊。
+  - npx 把 CLI 放在 npm 快取。
+  - `settings.json`、Lumen repo 都沒變。
 - **skill 用的時候**可能寫檔：
   - learn-taste 寫 `DESIGN.md`；
   - prototype 加路由與切換器；

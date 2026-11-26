@@ -16,4 +16,17 @@ missing = sorted(w for w in want if w not in EN)
 for w in missing:
     print("no English:", json.dumps(w, ensure_ascii=False))
 print("%d strings, %d without English" % (len(want), len(missing)))
-sys.exit(1 if missing else 0)
+# Japanese and Korean: every English entry should have one (a missing one shows in English)
+bad = 0
+for lang, name in (("ja", "Japanese"), ("ko", "Korean")):
+    f = os.path.join(HERE, "i18n-%s.js" % lang)
+    if not os.path.exists(f):
+        continue
+    t = open(f, encoding="utf-8").read()
+    D = json.loads(t[t.index("{"):t.rindex("}") + 1])
+    gone = [k for k in EN if k not in D]
+    for k in gone:
+        print("no %s:" % name, json.dumps(k, ensure_ascii=False))
+    print("%s: %d of %d" % (name, len(EN) - len(gone), len(EN)))
+    bad += len(gone)
+sys.exit(1 if missing or bad else 0)
