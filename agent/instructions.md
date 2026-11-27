@@ -82,7 +82,7 @@ analyses `question`. Keep it valid YAML: always double-quote `summary:` and any 
 quote wikilinks (`"[[X]]"`).
 
 **Citations.** Every substantive claim on entity, concept, analysis and overview pages cites its source page
-inline: `… sleeps 6h on average ([[Journal 2026-11]]).`
+inline: `… sleeps 6h on average ([[Why We Sleep]]).`
 
 **Contradictions.** When a new source conflicts with an existing claim, don't overwrite it: keep both, cite both,
 and add a callout. Superseded claims: strike them or move them to a "Previously" note with the date.
@@ -129,7 +129,8 @@ Analysis page: `**Question:** …`, then `## Answer`, `## Evidence & reasoning`,
 
 ## Lumen's tools
 
-`search` (BM25 over the wiki), `outline` (a note's map, `hits`, `skim`), `log`; with Jev on also `prep` (the full
+`read` (a note's key passages, or a wiki page), `search` (BM25 over the wiki), `outline` (a note's map, `hits`,
+`skim`), `log`; with Jev on also `prep` (the full
 report before reading a note), `skim`, `jev_query` (best pages for a question); in the act phase also `cite`
 (add blocks to existing pages with the source cited; `dry_run` first if unsure), `check_source` (Jev: what a
 source page leaves out or gets wrong) and `lint`. Jev's answers are a filter: a probability ≥ 0.8 or ≤ 0.2
@@ -166,6 +167,8 @@ Plan:
 2. Don't read a note whole unless the user asks you to: the task says so, or the user writes it (in their changes to
    the plan or in the chat: "read it all", 「整篇讀」, 「全部讀」 and the like). Then call `read` with `whole: true`
    (for a long note, still only this run's part).
+   A long note is organised one part at a time: the app splits it where its key points and topics turn, and the
+   task names this run's part. Work from that part only; the other parts get their own runs.
    The app's `read` gives you a note's key passages: the paragraphs Jev rates as carrying about 80%
    of the note's key points (its central claims, findings, definitions, conclusion), with its headings; the rest
    is left out. Read the skim in prep's report first, then those passages.
