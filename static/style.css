@@ -94,9 +94,6 @@ a:hover { text-decoration: underline; }
           mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='7' cy='7' r='5' fill='none' stroke='black' stroke-width='1.6'/%3E%3Cpath d='M11 11l3.5 3.5' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat; }
 .search input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .quick { position: absolute; top: 40px; left: 0; right: 0; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-pop); z-index: 10; max-height: 360px; overflow: auto; }
-.jev-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.jev-state.on::before { content: "● "; color: var(--accent); }
-.jev-state.off::before { content: "● "; color: var(--missing); }
 
 /* columns */
 .cols { flex: 1; display: grid; grid-template-columns: 280px 1fr 340px; min-height: 0; }
@@ -106,11 +103,6 @@ a:hover { text-decoration: underline; }
 .center { overflow: auto; min-height: 0; display: flex; flex-direction: column; }
 
 /* left */
-.tabs { display: flex; gap: 2px; margin: 10px 8px 8px; padding: 2px; border-radius: 9px; background: var(--hover); }
-.tabs button { flex: 1; border: none; border-radius: 7px; padding: 4px 6px; color: var(--muted); font-size: 13px; }
-.tabs button:is(:active, .pressed):not(:disabled) { transform: none; background-image: var(--press-layer); }
-.tabs button.on { color: var(--text); background: var(--bg); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-@media (hover: hover) and (pointer: fine) { .tabs button:not(.on):hover { color: var(--text); } }
 .filter { margin: 0 8px 8px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
 .filter:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .tree { overflow: auto; padding: 0 4px 24px; flex: 1; font-size: 13px; }
@@ -205,9 +197,6 @@ a:hover { text-decoration: underline; }
 }
 
 /* ---- v2: journal button, type chips, tabs, compare, toast, drop ---- */
-.left-actions { padding: 10px 8px 0; }
-.left-actions button { height: 32px; }
-.left-actions button { width: 100%; text-align: left; background: var(--bg); }
 .kb-types { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 8px 8px; }
 .kb-types button { font-size: 12px; padding: 2px 9px; border-radius: 12px; background: var(--bg); }
 .kb-types button span { color: var(--muted); }
@@ -244,9 +233,6 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .cmp-tag { position: absolute; top: 18px; right: 18px; font: 600 12px var(--font); color: var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 0 8px; }
 .note.small { font-size: 14.5px; line-height: 1.7; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 8px; font-size: 13px; z-index: 50; max-width: 90vw; box-shadow: var(--shadow-pop); }
-.jev-state button { font-size: 12px; height: 28px; padding: 0 12px; border-radius: 14px; }
-.jev-state.on button { border-color: var(--accent); color: var(--accent); }
-.jev-state.on::before, .jev-state.off::before { content: none; }
 @media (max-width: 1100px) { .cmp { grid-template-columns: 1fr; } .editor { width: calc(100% - 48px); } }
 .tabbar { flex: none; height: 37px; align-items: flex-end; }
 .view { flex: 1 0 auto; }
@@ -263,7 +249,6 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .cols.left-off .gutter[data-gutter=left]::after, .cols.right-off .gutter[data-gutter=right]::after { width: 3px; left: 1px; background: var(--line); }
 body.resizing { cursor: col-resize; user-select: none; }
 body.resizing iframe { pointer-events: none; }
-.left-actions button { font-weight: 500; }
 .seg { display: flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; width: 100%; }
 .seg button { flex: 1; border: none; border-radius: 0; height: 28px; padding: 0 8px; font-size: 12px; background: var(--bg); display: flex; align-items: center; justify-content: center; gap: 5px; }
 .seg button + button { border-left: 1px solid var(--line); }
@@ -310,9 +295,7 @@ body.resizing iframe { pointer-events: none; }
 .icon-btn .fill { opacity: 0; }
 .icon-btn.on .fill { opacity: .55; }
 #toggle-right { margin-left: auto; }
-.jev-state { margin-left: 0; }
 #toggle-right { margin-left: auto; }
-#view-btn { margin-left: -6px; }
 .tree .row { position: relative; contain-intrinsic-size: auto 22px; }   /* 22px + 6px padding = the real 28px row */
 /* While a column line is dragged, rows out of view skip layout (a 1,400-row folder); not while scrolling, where laying out each row as it appears costs more */
 .resizing .tree .row, .sliding .tree .row { content-visibility: auto; }   /* rows skip layout while a column is dragged or slides */
@@ -343,7 +326,6 @@ button.danger, .primary.danger { background: var(--missing); border-color: var(-
 .modal p { margin: 6px 0; color: var(--muted); font-size: 13px; }
 .modal code { font-size: 12px; background: var(--code); padding: 0 4px; border-radius: 3px; }
 .modal-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.nav-btns { display: flex; gap: 0; }
 .icon-btn:disabled { opacity: .35; cursor: default; background: none; }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .vault-where { font-size: 11px; font-weight: 400; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
@@ -355,8 +337,6 @@ button.danger, .primary.danger { background: var(--missing); border-color: var(-
 .to-note code { font-size: 11px; background: var(--code); padding: 0 4px; border-radius: 3px; }
 
 /* ---------- v5: vaults, new note, rename, versions, PDF layout ---------- */
-.left-actions { display: flex; gap: 6px; }
-.left-actions button { flex: 1; width: auto; }
 .brand { cursor: pointer; border-radius: 8px; padding: 3px 8px; margin-left: -2px; }
 @media (hover: hover) and (pointer: fine) { .brand:hover { background: var(--hover); } }
 .brand { transition: background-color 150ms ease, transform 160ms var(--ease-out); }
@@ -698,7 +678,6 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 .rail .brand .vault-where:empty { display: none; }
 .rail-line { width: 28px; height: 1px; background: var(--line); margin: 4px 0; flex: none; }
 .rail-gap { flex: 1; }
-.top .nav-btns, #jev-state, .left-actions, .left .tabs { display: none; }
 /* the top bar: column toggles at the ends, search in the middle */
 .top { display: grid; grid-template-columns: 1fr minmax(0, 640px) 1fr; }
 #toggle-left { justify-self: start; } #toggle-right { justify-self: end; }
@@ -724,3 +703,21 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 #ai-send::before { content: ""; width: 14px; height: 14px; background: currentColor;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 16V4M4.5 9.5 10 4l5.5 5.5' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;
           mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 16V4M4.5 9.5 10 4l5.5 5.5' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat; }
+/* a locked note shows a small lock in its tab */
+.tab-lock { flex: none; color: var(--muted); }
+
+/* ---------- break-ui fixes (2026-11-28) ---------- */
+/* 1. Narrow windows: the note keeps the full height; the side columns open over it from the rail and close when you tap the note */
+@media (max-width: 760px) {
+  .cols { grid-template-columns: minmax(0, 1fr) !important; grid-auto-rows: minmax(0, 1fr); overflow: hidden; }
+  .cols > .left, .cols > .right { position: fixed; top: 52px; bottom: 0; z-index: 20; max-height: none; box-shadow: var(--shadow-pop); border-top: none; }
+  .cols > .left { left: 64px; width: min(320px, calc(100vw - 64px)); }
+  .cols > .right { right: 0; width: min(360px, calc(100vw - 64px)); border-left: 1px solid var(--line); }
+  .cols.left-off > .left, .cols.right-off > .right { display: none; }
+}
+/* 2. A long search hint ends in "…" instead of being cut mid-letter */
+.search input { text-overflow: ellipsis; }
+/* 3. Tabs shrink like a browser's instead of running off the edge */
+#tabbar .tab { flex-shrink: 1; min-width: 72px; }
+#tabbar { scrollbar-width: none; }
+#tabbar::-webkit-scrollbar { display: none; }

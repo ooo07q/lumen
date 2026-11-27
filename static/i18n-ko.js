@@ -1,6 +1,11 @@
 // Korean for Lumen's interface, keyed by the Traditional Chinese text like i18n-en.js. A string missing here shows in
 // English. Drafted by Claude (Sonnet) from the Chinese and English, checked for markup; native speakers welcome to fix.
 const LUMEN_KO = {
+  "鎖定這篇（唯讀）": "이 노트 잠그기 (읽기 전용)",
+"唯讀：筆記只能看，不能改": "읽기 전용: 노트를 볼 수만 있고 고칠 수 없습니다",
+"唯讀": "읽기 전용",
+"還原這次編輯": "이번 편집 되돌리기",
+"放棄修改": "변경 버리기",
 "AI 整理的知識庫": "AI가 노트로 정리한 지식 베이스",
 "Jev：開，點一下關掉": "Jev: 켜짐, 클릭하면 끔",
 "Jev：關，點一下打開": "Jev: 꺼짐, 클릭하면 켬",

@@ -1,6 +1,11 @@
 // Japanese for Lumen's interface, keyed by the Traditional Chinese text like i18n-en.js. A string missing here shows in
 // English. Drafted by Claude (Sonnet) from the Chinese and English, checked for markup; native speakers welcome to fix.
 const LUMEN_JA = {
+  "鎖定這篇（唯讀）": "このノートをロック（閲覧のみ）",
+"唯讀：筆記只能看，不能改": "読み取り専用：ノートは見るだけで、変更できません",
+"唯讀": "読み取り専用",
+"還原這次編輯": "今回の編集を元に戻す",
+"放棄修改": "変更を破棄",
 "AI 整理的知識庫": "AIがノートから整理したナレッジベース",
 "Jev：開，點一下關掉": "Jev：オン（クリックでオフ）",
 "Jev：關，點一下打開": "Jev：オフ（クリックでオン）",

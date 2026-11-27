@@ -30,6 +30,7 @@ const store = {
 };
 const S = {
   tree: null, rawRoot: null, sideTab: store.get("side-tab", "raw"), rawMode: store.get("raw-mode", "tree"), results: null,
+  locked: new Set(store.get("locked-notes", [])),   // notes locked to reading; every other editable note opens ready to type in
   open: new Set(store.get("open-folders", [])), queueOpen: new Set(),
   kbType: store.get("kb-type", "concept"), jevOn: store.get("jev-on", true), pdfTidy: store.get("pdf-tidy", true),
   tabs: [], active: -1, checking: new Set(), panelFor: null, sigs: null,
@@ -214,18 +215,25 @@ function renderRawNode(node, prefix, filter) {
   return html + rowsHtml(rows);
 }
 
+// Same buttons as before: change only which is on and the counts, so the button just tapped stays and shows its press
+function patchButtons(el, html) {
+  const t = document.createElement("div"); t.innerHTML = html;
+  const a = el.querySelectorAll("button"), b = t.querySelectorAll("button"), key = x => x.dataset.mode || x.dataset.type;
+  if (!a.length || a.length !== b.length || [...a].some((x, i) => key(x) !== key(b[i]))) { el.innerHTML = html; return; }
+  a.forEach((x, i) => { x.classList.toggle("on", b[i].classList.contains("on")); if (x.innerHTML !== b[i].innerHTML) x.innerHTML = b[i].innerHTML; });
+}
 function renderSub() {
   const el = $("#sub");
   if (S.sideTab === "wiki") {
     const counts = {};
     for (const p of S.tree.pages) counts[p.type] = (counts[p.type] || 0) + 1;
-    el.innerHTML = TYPE_ORDER.filter(t => counts[t]).map(t =>
+    patchButtons(el, TYPE_ORDER.filter(t => counts[t]).map(t =>
       '<button data-type="' + t + '" class="' + (S.kbType === t ? "on" : "") + '">' + TYPE_ZH[t] + ' <span>' + counts[t] + "</span></button>").join("") +
-      '<button data-type="all" class="' + (S.kbType === "all" ? "on" : "") + T('">全部</button>');
+      '<button data-type="all" class="' + (S.kbType === "all" ? "on" : "") + T('">全部</button>'));
   } else if (S.sideTab === "raw") {
     const todo = S.tree.raw.filter(f => !f.done && !inJournal(f.path) && !SKIP_DECISIONS.has(f.d)).length;
-    el.innerHTML = '<div class="seg"><button data-mode="tree" class="' + (S.rawMode === "tree" ? "on" : "") + T('">資料夾</button>') +
-      '<button data-mode="todo" class="' + (S.rawMode === "todo" ? "on" : "") + T('"><span class="new"></span>待整理 <span>') + nf(todo) + "</span></button></div>";
+    patchButtons(el, '<div class="seg"><button data-mode="tree" class="' + (S.rawMode === "tree" ? "on" : "") + T('">資料夾</button>') +
+      '<button data-mode="todo" class="' + (S.rawMode === "todo" ? "on" : "") + T('"><span class="new"></span>待整理 <span>') + nf(todo) + "</span></button></div>");
   } else { el.hidden = true; return; }
   el.hidden = false;
 }
@@ -233,7 +241,6 @@ function renderSub() {
 function renderTree() {
   const el = $("#tree"), filter = $("#filter").value.trim().toLowerCase();
   vChunks = [];
-  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === S.sideTab));
   railSync();
   $("#filter").placeholder = { journal: T("篩選日期"), raw: T("篩選筆記"), assets: T("篩選附件"), wiki: T("篩選頁名"), results: T("篩選") }[S.sideTab];
   if (!S.tree) { $("#sub").innerHTML = ""; el.innerHTML = '<p class="muted pad"><span class="spin"></span></p>'; return; }   // list not loaded yet: refreshTree draws it
@@ -380,10 +387,10 @@ $("#tree").addEventListener("auxclick", e => {
   const row = e.target.closest(".row[data-path]");
   if (row && e.button === 1) { e.preventDefault(); openAny(row.dataset.path, { newTab: true, background: true }); }
 });
-document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
-  S.sideTab = b.dataset.tab; if (S.sideTab !== "results") store.set("side-tab", S.sideTab);
+function setSideTab(name) {                                   // the left column's place: journal, notes, attachments, knowledge base
+  S.sideTab = name; if (name !== "results") store.set("side-tab", name);
   $("#filter").value = ""; renderTree(); $("#tree").scrollTop = 0;
-}));
+}
 $("#sub").addEventListener("click", e => {
   const b = e.target.closest("button");
   if (!b) return;
@@ -394,7 +401,7 @@ $("#sub").addEventListener("click", e => {
 let filterTimer;
 $("#filter").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(renderTree, 150); });
 
-$("#journal-btn").onclick = async () => {
+async function openToday() {
   try {
     const r = await api("/api/journal", {});
     await refreshTree();
@@ -402,7 +409,7 @@ $("#journal-btn").onclick = async () => {
     await openNote(r.path, { edit: true });
     toast(r.created ? T("建立了今天的日記。日記不送 Jev。") : T("打開今天的日記。"));
   } catch (e) { toast(T("沒辦法建立日記：") + e.message); }
-};
+}
 
 // ---------- moving, importing and deleting files (raw/ only; wiki pages belong to the AI)
 
@@ -452,6 +459,7 @@ async function moveFile(path, dir) {
   try {
     const r = await api("/api/move", { path, dir });
     for (const t of S.tabs) if (t.path === path) { t.path = r.path; }
+    lockMoved(path, r.path);
     if (tab() && tab().path === r.path) history.replaceState(Object.assign({}, history.state, { path: r.path }), "", "#" + encodeURIComponent(r.path));
     if (dir && dir !== ROOT() && S.sideTab === "raw") S.open.add(dir);
     await refreshTree();
@@ -522,7 +530,7 @@ async function htmlToNote(path, btn) {
 }
 
 // right-click menu on files and tabs
-function showMenu(x, y, items, from, instant) {    // from: the trigger point it grows out of (default x, y); instant: a right-click menu, no entry motion
+function showMenu(x, y, items, from, instant, src) {    // from: the trigger point it grows out of (default x, y); instant: a right-click menu, no entry motion
   const m = $("#menu");
   m.classList.toggle("instant", !!instant);
   m.innerHTML = items.map((it, i) => it ? '<button data-i="' + i + '"' + (it.danger ? ' class="danger"' : "") + ">" + esc(it.label) + "</button>" : "<hr>").join("");
@@ -534,8 +542,21 @@ function showMenu(x, y, items, from, instant) {    // from: the trigger point it
   const [fx, fy] = from || [x, y], clamp = (v, hi) => Math.max(0, Math.min(hi, v));
   m.style.transformOrigin = clamp(fx - left, r.width) + "px " + clamp(fy - top, r.height) + "px";   // grows out of its trigger
   m.onclick = e => { const b = e.target.closest("button"); if (b) { m.hidden = true; items[+b.dataset.i].fn(); } };
+  const ev = window.event, tg = ev && ev.target && ev.target.closest ? ev.target : null;
+  MENU.src = src || (!instant && tg ? tg.closest("button, [data-act], .icon-btn") : null);   // the button that opened it: pressing it again closes the menu
+  MENU.skip = null;
 }
-document.addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("#menu").hidden = true; });
+const MENU = { src: null, skip: null };
+document.addEventListener("mousedown", e => {
+  const m = $("#menu");
+  MENU.skip = !m.hidden && MENU.src && MENU.src.isConnected && MENU.src.contains(e.target) ? MENU.src : null;
+  if (!e.target.closest("#menu")) m.hidden = true;
+});
+document.addEventListener("click", e => {          // the click after that press (or Enter / Space on the button) must not open the menu again
+  const m = $("#menu"), s = MENU.skip || (!m.hidden && e.detail === 0 && MENU.src && MENU.src.isConnected && MENU.src.contains(e.target) ? MENU.src : null);
+  MENU.skip = null;
+  if (s && s.contains(e.target)) { m.hidden = true; e.stopPropagation(); e.preventDefault(); }
+}, true);
 document.addEventListener("click", e => { const b = e.target.closest("[data-more]"); if (b) { b.nextElementSibling.hidden = false; b.remove(); } });
 document.addEventListener("scroll", () => ($("#menu").hidden = true), true);
 // press feedback for taps: with tap-to-click, :active lasts ~0ms, so a pointer press also gets .pressed, kept at least PRESS_MS (never for the keyboard)
@@ -578,7 +599,7 @@ function renderTabbar() {
   const bar = $("#tabbar");
   bar.hidden = S.tabs.length === 0;
   bar.innerHTML = S.tabs.map((t, i) => '<div class="tab' + (i === S.active ? " on" : "") + '" draggable="true" data-i="' + i + '" title="' + esc(t.path || "") + '">' +
-    (t.kind === "compare" ? T('<span class="tab-kind">比較</span>') : t.kind === "file" ? '<span class="tab-kind file">' + fileKind(t.path)[1] + "</span>" : "") + '<span class="tab-title">' + esc(t.title) + "</span>" +
+    (t.kind === "compare" ? T('<span class="tab-kind">比較</span>') : t.kind === "file" ? '<span class="tab-kind file">' + fileKind(t.path)[1] + "</span>" : "") + '<span class="tab-title">' + esc(t.title) + "</span>" + (t.kind === "note" && S.locked.has(t.path) ? '<svg class="tab-lock" viewBox="0 0 20 20" width="12" height="12" aria-hidden="true"><rect x="4.5" y="9" width="11" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>' : "") +
     (t.dirty ? T('<span class="tab-dirty" title="還沒儲存">●</span>') : "") + '<button class="tab-x" data-close="' + i + T('" title="關閉">×</button></div>')).join("");
 }
 
@@ -642,6 +663,7 @@ function stash() {
   const t = tab();
   if (!t) return;
   t.scroll = $(".center").scrollTop;
+  t.peek = false;
   if (t.path) SCROLL_AT.set(t.kind + ":" + t.path, t.scroll);
   const ed = $("#editor");
   if (t.editing && ed) t.editText = Wys.value(ed);
@@ -664,11 +686,6 @@ function navRecord() {
     history.pushState(st, "", url);
   }
   try { sessionStorage.setItem("nav-max", NAV.max); } catch (e) {}
-  renderNav();
-}
-function renderNav() {
-  $("#nav-back").disabled = NAV.i <= 0;
-  $("#nav-fwd").disabled = NAV.i >= NAV.max;
 }
 window.addEventListener("popstate", async e => {
   const st = e.state;
@@ -680,10 +697,14 @@ window.addEventListener("popstate", async e => {
       if (i !== S.active) activate(i, false);
       if (st.path && S.tabs[i].path !== st.path) await openNote(st.path);   // that tab went on to another note
     } else if (st.path) await openNote(st.path);                           // the tab was closed since
-  } finally { NAV.restoring = false; renderNav(); }
+  } finally { NAV.restoring = false; }
 });
-$("#nav-back").onclick = () => history.back();
-$("#nav-fwd").onclick = () => history.forward();
+// back and forward between notes: ⌘[ and ⌘] (the buttons left with the rail; a desktop app has no browser buttons)
+document.addEventListener("keydown", e => {
+  if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+  if (e.key === "[") { e.preventDefault(); history.back(); }
+  else if (e.key === "]") { e.preventDefault(); history.forward(); }
+});
 
 function activate(i, push = true) {
   if (i === S.active && $("#view").dataset.tab === String(tab() && tab().id)) return;
@@ -713,10 +734,10 @@ const openAny = (path, opt) => openNote(path, opt);
 async function openNote(path, opt = {}) {
   const kind = /\.md$/i.test(path) ? "note" : "file";
   const existing = S.tabs.findIndex(t => t.kind === kind && t.path === path);
-  if (existing >= 0) { if (!opt.background) activate(existing); if (opt.edit) startEdit(); return; }
+  if (existing >= 0) { if (!opt.background) activate(existing); if (opt.edit) startEdit(true); return; }
   const t = { id: ++tabSeq, kind, path, title: kind === "note" ? baseName(path) : path.split("/").pop(), note: null, loading: kind === "note" };
   const cur = tab();
-  if (opt.newTab || !cur || cur.dirty || cur.editing || cur.kind !== "note") {
+  if (opt.newTab || !cur || cur.dirty || cur.kind !== "note") {
     S.tabs.push(t);
     if (!opt.background) { stash(); S.active = S.tabs.length - 1; }
   } else { stash(); t.id = cur.id; S.tabs[S.active] = t; }       // same tab, new note: keeps its id for back/forward
@@ -728,7 +749,7 @@ async function openNote(path, opt = {}) {
   t.loading = false;
   if (t.note) t.title = t.note.page ? t.note.page.title : (splitFrontmatter(t.note.text).fm.title || baseName(path));
   renderTabbar();
-  if (tab() === t) { renderView(); loadPanel(); if (opt.edit) startEdit(); }
+  if (tab() === t) { renderView(); loadPanel(); if (opt.edit) startEdit(true); }
 }
 
 function openCompare(s) {
@@ -809,8 +830,8 @@ function renderView() {
   if (t.error) { v.innerHTML = '<p class="muted pad">' + esc(t.error) + "</p>"; return; }
   const n = t.note;
   let tools = "";
-  if (n.editable) tools = '<div class="note-tools">' + (t.editing ? T('<button data-act="preview" class="primary" title="離開編輯（修改會自動儲存）">完成</button><button data-act="revert" title="回到這次開始編輯前的內容">還原這次編輯</button>') :
-    T('<button data-act="edit">編輯</button>') + (t.dirty ? T('<button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>') : "")) + T('<button data-act="more" class="ghost more" title="更多：版本、刪除">⋯</button>') + '<span class="muted save-msg">' + esc(t.msg || (t.editing ? T("修改會自動儲存 · 拖進或貼上檔案會存成附件") : "")) + "</span></div>";
+  if (n.editable && !t.editing && !S.locked.has(t.path) && !t.peek) { t.editing = true; t.msg = ""; t.editBase = t.editText ?? n.text; }   // editable notes open ready to type in
+  if (n.editable) tools = '<div class="note-tools">' + T('<button data-act="more" class="ghost more" title="更多：版本、刪除">⋯</button>') + '<span class="muted save-msg">' + esc(t.msg || (t.editing ? T("修改會自動儲存 · 拖進或貼上檔案會存成附件") : "")) + "</span></div>";
   if (t.external) tools += T('<div class="banner">這篇在別處被改過。<button data-act="reload">載入新版本</button>（你這裡的修改會不見）</div>');
   v.innerHTML = '<div class="note-head">' + headHtml(n, t) + "</div>" + tools +
     (t.editing ? '<div id="editor" class="editor wys" contenteditable="true" spellcheck="false"></div>' : '<article id="note" class="note">' + bodyHtml(n, t.full) + "</article>");
@@ -869,10 +890,38 @@ function renderFile(v, t) {
     (!S.tree.read_only ? T('<span>·</span><a data-act="delete">刪除</a>') : "") + '</div></div><div class="file-body">' + body + "</div>";
 }
 
-function startEdit() {
+function startEdit(focus) {
   const t = tab();
   if (!t || t.kind !== "note" || !t.note || !t.note.editable) return;
-  t.editing = true; t.msg = ""; t.editBase = t.editText ?? t.note.text; renderView(); $("#editor").focus();
+  t.peek = false;
+  if (!t.editing) { t.editing = true; t.msg = ""; t.editBase = t.editText ?? t.note.text; renderView(); }
+  if (focus && $("#editor")) $("#editor").focus();
+}
+// to reading: save what's left, then show the note as text
+async function stopEdit(t) {
+  const ed = tab() === t ? $("#editor") : null;
+  if (t.editing && ed) t.editText = Wys.value(ed);
+  t.editing = false;
+  if (t.dirty && !t.external) await saveTab(t);
+  if (t.editText != null) t.note = Object.assign({}, t.note, { text: t.editText });
+  if (tab() === t) renderView();
+}
+// back to the text from before this editing session (the menu offers it only when there is something to go back to)
+async function revertEdit(t) {
+  if (t.editing) {
+    const now = $("#editor") ? Wys.value($("#editor")) : liveText(t);
+    if (now === t.editBase) return;
+    if (!confirm(T("回到這次開始編輯前的內容？（之前的內容也可以從「版本」找回）"))) return;
+    t.editText = t.editBase; t.dirty = true; t.editing = false;
+    await saveTab(t);
+    t.note = Object.assign({}, t.note, { text: t.editText }); renderView();
+  } else if (!t.dirty || confirm(T("放棄還沒儲存的修改？"))) reloadTab(t);
+}
+function lockSave() { store.set("locked-notes", [...S.locked]); }
+function lockMoved(from, to) { if (S.locked.delete(from)) { S.locked.add(to); lockSave(); } }   // a locked note keeps its lock when renamed or moved
+async function toggleLock(t) {
+  if (S.locked.has(t.path)) { S.locked.delete(t.path); lockSave(); t.peek = false; renderTabbar(); if (tab() === t) renderView(); }
+  else { S.locked.add(t.path); lockSave(); t.peek = false; await stopEdit(t); renderTabbar(); }
 }
 
 let RENAMING = null;           // a rename in flight: a save waits for it, so it goes to the new name
@@ -936,6 +985,7 @@ async function reloadTab(t) {
   try {
     const n = await api("/api/note?path=" + encodeURIComponent(t.path));
     Object.assign(t, { note: n, dirty: false, editText: undefined, external: false });
+    if (t.editing) t.editBase = n.text;
     if (!t.editing) t.msg = "";
     if (tab() === t) { renderTabbar(); renderView(); loadPanel(true); }
   } catch (e) {}
@@ -949,33 +999,22 @@ $("#view").addEventListener("click", e => {
   const o = e.target.closest("[data-open]");
   if (o) { openNote(o.dataset.open, { newTab: true }); return; }
   if (e.target.closest("[data-show-all]")) { tab().full = true; renderView(); return; }
+  const pk = tab();
+  if (pk && pk.peek && e.target.closest("#note") && !e.target.closest("a, button") && !String(getSelection())) { startEdit(true); return; }   // marks shown from the right column: a click goes back to typing
   const b = e.target.closest("[data-act]");
   if (!b) return;
   const t = tab();
   const act = b.dataset.act;
-  if (act === "edit") startEdit();
-  else if (act === "preview") (async () => {          // Done: save what's left, then show the note
-    const text = Wys.value($("#editor"));
-    t.editText = text; t.editing = false;
-    if (t.dirty && !t.external) await saveTab(t);
-    t.note = Object.assign({}, t.note, { text: t.editText }); renderView();
-  })();
-  else if (act === "save") save();
-  else if (act === "revert" && t.editing) (async () => {   // back to the text from before this editing began
-    const now = Wys.value($("#editor"));
-    if (now === t.editBase) { t.editing = false; t.dirty = false; t.msg = ""; renderView(); return; }
-    if (!confirm(T("回到這次開始編輯前的內容？（之前的內容也可以從「版本」找回）"))) return;
-    t.editing = false; t.editText = t.editBase; t.dirty = true;
-    await saveTab(t);
-    t.note = Object.assign({}, t.note, { text: t.editText }); renderView();
-  })();
-  else if (act === "revert") { if (!t.dirty || confirm(T("放棄還沒儲存的修改？"))) { t.editing = false; reloadTab(t); } }
+  if (act === "save") save();
   else if (act === "reload") reloadTab(t);
   else if (act === "next-hl") nextHighlight();
   else if (act === "delete") deleteFile(t.path);
   else if (act === "more") {
     const r = b.getBoundingClientRect();
-    showMenu(null, r.bottom + 4, [{ label: T("以前的版本…"), fn: () => showHistory(t.path) }, { label: T("刪除（移到垃圾桶）"), fn: () => deleteFile(t.path) }], [r.right, r.bottom]);
+    const ed = $("#editor"), back = t.editing ? (ed ? Wys.value(ed) : liveText(t)) !== t.editBase : t.dirty;
+    const lk = S.locked.has(t.path);
+    showMenu(null, r.bottom + 4, [{ label: (lk ? "✓ " : "") + T("鎖定這篇（唯讀）"), fn: () => toggleLock(t) }, null].concat(back ? [{ label: t.editing ? T("還原這次編輯") : T("放棄修改"), fn: () => revertEdit(t) }] : [],
+      [{ label: T("以前的版本…"), fn: () => showHistory(t.path) }, { label: T("刪除（移到垃圾桶）"), fn: () => deleteFile(t.path) }]), [r.right, r.bottom]);
   }
   else if (act === "history") showHistory(t.path);
   else if (act === "rename") startTitleRename(t);
@@ -1275,7 +1314,8 @@ $("#panel").addEventListener("click", async e => {
   const m = e.target.closest(".mention");
   if (m) {
     if (e.target.closest(".t")) { openNote(m.dataset.path, { newTab: e.metaKey || e.ctrlKey }); return; }
-    if (tab() && tab().editing) { toast(T("預覽模式才能標出位置。")); return; }
+    const ct = tab();
+    if (ct && ct.editing) { ct.peek = true; await stopEdit(ct); }   // marks need the reading view; a click in the note goes back to editing
     if (!highlight(JSON.parse(m.dataset.names))) openNote(m.dataset.path, { newTab: e.metaKey || e.ctrlKey });
   }
 });
@@ -1399,7 +1439,6 @@ async function ask(q) {
   if (!q) return;
   const jev = jevUsable();
   S.results = { loading: true, jev };
-  document.querySelector('.tabs button[data-tab="results"]').hidden = false;
   S.sideTab = "results"; renderTree();
   const cached = jev ? JEV_CACHE.get(q) : null;
   try { S.results = cached && !cached.error ? Object.assign({}, cached) : await api("/api/search?q=" + encodeURIComponent(q) + (jev ? "" : "&mode=bm25")); }
@@ -1408,18 +1447,11 @@ async function ask(q) {
   if (S.sideTab === "results") renderTree();
 }
 
-function renderJevState() {
-  const el = $("#jev-state");
-  if (!S.tree.jev) { el.className = "jev-state off"; el.textContent = T("沒有連接 Jev：找頁面只比對名稱和關鍵字"); return; }
-  el.className = "jev-state " + (S.jevOn ? "on" : "off");
-  el.innerHTML = T('<button id="jev-toggle" title="Jev 是做小判斷的 AI。關掉後，筆記內容完全不送給 Jev：搜尋改成比對關鍵字，新筆記也不會自動排整理順序。">Jev：') + (S.jevOn ? T("開") : T("關")) + "</button>" +
-    (S.tree.read_only ? T(' <span class="chip">唯讀</span>') : "");
-  $("#jev-toggle").onclick = () => {
-    S.jevOn = !S.jevOn; store.set("jev-on", S.jevOn); renderJevState();
-    api("/api/jev/pause", { paused: !S.jevOn }).catch(() => {});
-    toast(S.jevOn ? T("Jev 開：搜尋、找連結、排整理順序都請 Jev 判斷。") : T("Jev 關：筆記內容不再送給 Jev。搜尋改成比對關鍵字，新筆記不會自動排順序。"));
-    if (panelData && tab() && tab().kind === "note") renderPanel(panelData);
-  };
+function toggleJev() {                                       // from Settings
+  S.jevOn = !S.jevOn; store.set("jev-on", S.jevOn);
+  api("/api/jev/pause", { paused: !S.jevOn }).catch(() => {});
+  toast(S.jevOn ? T("Jev 開：搜尋、找連結、排整理順序都請 Jev 判斷。") : T("Jev 關：筆記內容不再送給 Jev。搜尋改成比對關鍵字，新筆記不會自動排順序。"));
+  if (panelData && tab() && tab().kind === "note") renderPanel(panelData);
 }
 
 // ============================================================ live updates
@@ -1449,7 +1481,7 @@ async function poll() {
     for (const t of S.tabs) {
       if (t.kind !== "note" || !t.note || c.mtimes[t.path] == null) continue;
       if (t.saving || Math.abs(c.mtimes[t.path] - t.note.mtime) < 0.001) continue;   // its own save, in flight
-      if (t.dirty || t.editing) { if (!t.external) { t.external = true; if (tab() === t) renderView(); } }
+      if (t.dirty) { if (!t.external) { t.external = true; if (tab() === t) renderView(); } }
       else reloadTab(t);
     }
   } catch (e) {}
@@ -1473,7 +1505,7 @@ function grabReadLine() {
   const c = $(".center"), note = $("#note") || $("#editor");
   if (!c || !note || c.scrollTop < 1 || !document.caretRangeFromPoint) return null;
   if (readAnchor && Math.abs(c.scrollTop - readAnchor.scroll) < 1 && readAnchor.node.isConnected) return readAnchor;
-  const bar = $("#tabbar"), top = Math.max(c.getBoundingClientRect().top, bar ? bar.getBoundingClientRect().bottom : 0), x = note.getBoundingClientRect().left + 8;
+  const bar = $("#tabbar"), top = Math.max(c.getBoundingClientRect().top, bar ? bar.getBoundingClientRect().bottom : 0), x = note.getBoundingClientRect().left + (parseFloat(getComputedStyle(note).paddingLeft) || 0) + 4;   // inside the text, past the editor's padding
   for (const dy of [24, 36, 52, 76]) {     // the first line you can read, just under the tab bar
     const rg = document.caretRangeFromPoint(x, top + dy);
     if (!rg || !note.contains(rg.startContainer)) continue;
@@ -1493,7 +1525,7 @@ function grabReadLine() {
 function holdReadLine(a) {
   if (!a) return;
   const c = $(".center");
-  c.scrollTop += a.box.getBoundingClientRect().top - a.y;
+  c.scrollTop += a.box.getBoundingClientRect().top - a.y;   // the page scrolls in whole pixels: within 1px
   readAnchor = Object.assign(a, { scroll: c.scrollTop });
 }
 let slideGen = 0;
@@ -1584,13 +1616,10 @@ applyLayout();
   $("#vault-where").classList.toggle("prot", !!S.tree.protected);
   $("#brand").title = T("正在使用：") + where + (S.tree.protected ? T("\n這個筆記庫在 protected.txt 裡：只能看，不能改。") : "") + T("\n點一下切換筆記庫");
   document.title = S.tree.vault + " · Lumen";
-  renderJevState();
-  $("#journal-btn").hidden = $("#new-btn").hidden = !!S.tree.read_only;
   if (!["journal", "raw", "assets", "wiki"].includes(S.sideTab)) S.sideTab = "raw";
   renderTree();
   NAV.i = (history.state && history.state.i) || 0;
   if (history.state && history.state.tab != null) history.replaceState(Object.assign({}, history.state, { tab: null }), "");
-  renderNav();
   const h = decodeURIComponent(location.hash.slice(1));
   if (h) openNote(h);
   poll();
@@ -1608,7 +1637,6 @@ async function newNote(dir) {
     if (t) { t.renameNow = true; renderView(); }
   } catch (e) { toast(T("沒辦法新增：") + e.message); }
 }
-$("#new-btn").onclick = () => newNote();
 
 // the title of a note whose title is its file name: click, type, Enter
 function startTitleRename(t) {
@@ -1658,6 +1686,7 @@ async function renameJob(path, name) {
   try {
     const r = await api("/api/rename", { path, name });
     if (!r.renamed) return;
+    lockMoved(path, r.path);
     for (const t of S.tabs) if (t.path === path) {
       t.path = r.path; t.title = t.kind === "note" ? baseName(r.path) : r.path.split("/").pop();
       if (t.note) { t.note = Object.assign({}, t.note, { path: r.path }); reloadTab(t); }   // its `title:` may have changed
@@ -1852,7 +1881,7 @@ $("#brand").addEventListener("click", async e => {
     fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
   items.push({ label: T("　 ") + T("其他筆記庫…"), fn: () => showStart() }, null,
     { label: T("在 Finder 中顯示"), fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) });
-  showMenu(r.right + 6, r.top, items, [r.right, r.top + r.height / 2]);   // the vault sits in the rail: the menu opens beside it
+  showMenu(r.right + 6, r.top, items, [r.right, r.top + r.height / 2], false, $("#brand"));   // the vault sits in the rail: the menu opens beside it
 });
 
 // ============================================================ ask AI (Claude Code, answers only)
@@ -2572,12 +2601,12 @@ $("#rail").addEventListener("click", e => {
   if (go === "ai") { if (!rightHidden() && S.rtab === "ai") toggleSide("right"); else showRight("ai"); return; }
   if (!L.leftOff && S.sideTab === go) { toggleSide("left"); return; }
   if (L.leftOff) toggleSide("left");
-  if (S.sideTab !== go) document.querySelector('.tabs button[data-tab="' + go + '"]').click();
+  if (S.sideTab !== go) setSideTab(go);
   railSync();
 });
 $("#lhead-act").onclick = () => {
-  if (S.sideTab === "journal") $("#journal-btn").click();
-  else if (S.sideTab === "raw") $("#new-btn").click();
+  if (S.sideTab === "journal") openToday();
+  else if (S.sideTab === "raw") newNote();
   else if (S.sideTab === "wiki") startAgent("lint", {});
 };
 // Settings: how it looks, the language, Jev, connecting AI. Nothing about files or vaults.
@@ -2586,7 +2615,7 @@ $("#set-btn").onclick = e => {
   const lang = () => at(Object.entries(LANGS).map(([k, name]) => ({ label: (k === LANG && chosenLang() ? "✓ " : T("　 ")) + name, fn: () => k !== LANG && setLang(k) }))
     .concat([null, { label: (chosenLang() ? T("　 ") : "✓ ") + T("跟隨系統"), fn: () => chosenLang() && setLang("") }]));
   const items = [{ label: T("外觀…"), fn: () => showViewSettings() }, { label: T("語言") + T("：") + LANGS[LANG] + " ›", fn: () => setTimeout(lang, 0) }, null];
-  if (S.tree && S.tree.jev) items.push({ label: S.jevOn ? T("Jev：開，點一下關掉") : T("Jev：關，點一下打開"), fn: () => $("#jev-toggle").click() });
+  if (S.tree && S.tree.jev) items.push({ label: S.jevOn ? T("Jev：開，點一下關掉") : T("Jev：關，點一下打開"), fn: toggleJev });
   items.push({ label: T("連接 AI…"), fn: () => showConnect() });
   at(items);
 };
@@ -2610,3 +2639,10 @@ $("#ai").addEventListener("click", e => {
   menu.style.transformOrigin = Math.round(r.left + r.width / 2 - menu.offsetLeft) + "px 100%";
 });
 railSync();
+
+// Narrow windows: side columns sit over the note, so tapping the note closes them, and they start closed
+const SMALL = matchMedia("(max-width: 760px)");
+function narrowClose() { if (!L.leftOff) toggleSide("left"); if (!rightHidden()) toggleSide("right"); }
+$(".center").addEventListener("pointerdown", () => { if (SMALL.matches) narrowClose(); });
+SMALL.addEventListener("change", () => { if (SMALL.matches) narrowClose(); });
+if (SMALL.matches) narrowClose();

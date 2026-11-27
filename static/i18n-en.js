@@ -1,6 +1,11 @@
 // English for Lumen's interface, keyed by the Traditional Chinese text. Built from the strings in app.js,
 // index.html and the server's messages.
 const LUMEN_EN = {
+  "鎖定這篇（唯讀）": "Lock this note (read-only)",
+"唯讀：筆記只能看，不能改": "Read-only: notes can be read, not changed",
+"唯讀": "Read-only",
+"還原這次編輯": "Undo this edit",
+"放棄修改": "Discard changes",
 "AI 整理的知識庫": "The wiki AI wrote from your notes",
 "Jev：開，點一下關掉": "Jev: on, click to turn off",
 "Jev：關，點一下打開": "Jev: off, click to turn on",
