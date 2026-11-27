@@ -164,7 +164,7 @@ a:hover { text-decoration: underline; }
 .right h3 { font-size: 12px; letter-spacing: .04em; color: var(--muted); font-weight: 600; margin: 18px 0 8px; display: flex; align-items: center; gap: 6px; }
 .right h3:first-child { margin-top: 2px; }
 .right h3 .n { font-weight: 400; }
-.card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
 .card.contra { border-left: 3px solid var(--warn); }
 .card.positions { border-left: 3px solid var(--pos); }
 .card .kind { font-size: 11px; font-weight: 600; }
@@ -172,13 +172,14 @@ a:hover { text-decoration: underline; }
 .card.positions .kind { color: var(--pos); }
 .card .body { font-size: 13px; margin: 2px 0 6px; }
 .card .acts { display: flex; gap: 6px; flex-wrap: wrap; }
-.card .acts button { font-size: 12px; padding: 1px 8px; }
+.card .acts button { font-size: 12px; height: 26px; padding: 0 10px; }
 .card details summary { cursor: pointer; font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card details[open] summary { display: block; }
 .card details > div { font-size: 12px; color: var(--muted); margin-top: 4px; max-height: 260px; overflow: auto; }
 .card details > div p { margin: .3em 0; }
-.mention { display: flex; gap: 8px; align-items: baseline; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
-.mention:hover { background: var(--line); }
+.mention { display: flex; gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .mention:hover { background: var(--hover); } }
+.mention { transition: background-color 150ms ease; }
 .mention .t { font-weight: 500; }
 .mention .s { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .mention .x { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
@@ -187,7 +188,7 @@ a:hover { text-decoration: underline; }
 .mention.no { opacity: .55; }
 .sub { font-size: 11px; color: var(--muted); margin: 10px 6px 2px; }
 .note-line { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
-.banner { font-size: 12px; padding: 6px 10px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); margin-bottom: 8px; }
+.banner { font-size: 12px; line-height: 1.5; padding: 8px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); margin-bottom: 8px; }
 .banner.ok { background: var(--accent-soft); color: var(--accent); }
 .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: s 0.8s linear infinite; vertical-align: -1px; }
 @keyframes s { to { transform: rotate(360deg); } }
@@ -418,6 +419,8 @@ h1.renamable:hover { background: var(--panel); }
 .cols.right-off .right { visibility: hidden; }
 .rtabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); flex: none; }
 .rtabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 4px 10px 6px; color: var(--muted); font-size: 13px; }
+.rtabs button:active:not(:disabled) { transform: none; }
+@media (hover: hover) and (pointer: fine) { .rtabs button:not(.on):hover { color: var(--text); border-color: transparent; } }
 .rtabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 .rpane { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 40px; }
 .rpane[hidden] { display: none; }
