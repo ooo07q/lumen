@@ -1911,7 +1911,7 @@ function planHtml(plan) {
   return h + "</div>";
 }
 function agentHtml(t) {
-  const name = { ingest: T("整理筆記"), analysis: T("存成分析頁"), lint: T("檢查知識庫") }[t.task] || T("工作");
+  const name = { ingest: T("整理筆記"), analysis: T("存進知識庫"), lint: T("檢查知識庫") }[t.task] || T("工作");
   let h = '<div class="ai-turn ag"><div class="ai-q">✦ ' + esc(TS(t.label) || name) + "</div>";
   if (t.model) h += '<div class="ai-ctxline">' + esc(cap(t.model)) + T("，") + esc(EFFORT_NAME[t.effort] || t.effort) + (t.jev ? T(" · Jev 開") : T(" · Jev 關")) + "</div>";
   h += '<div class="ai-a">';
@@ -1933,7 +1933,7 @@ function agentHtml(t) {
       ch.map(c => '<div class="ag-ch"><span class="ag-k ' + c.kind + '">' + KIND[c.kind] + "</span>" + '<a class="wl" data-path="' + esc(c.path) + '">' + esc(c.path.replace(/^wiki\//, "").replace(/\.md$/, "")) + "</a>" +
         '<button class="ghost" data-ag-diff="' + esc(c.path) + '" data-ag-id="' + esc(t.id) + T('">差異</button></div>')).join("") + "</div>";
     if ((t.outside || []).length) h += T('<div class="banner">注意：這段時間知識庫以外也有檔案變了（可能是你自己改的）：') + t.outside.slice(0, 5).map(esc).join(T("、")) + "</div>";
-    if (ch.length && !t.undone && !t.restored) h += '<div class="ai-acts"><button data-ag-undo="' + esc(t.id) + T('">全部復原</button></div>');
+    if (ch.length && !t.undone) h += '<div class="ai-acts"><button data-ag-undo="' + esc(t.id) + T('">全部復原</button></div>');
   }
   if (t.status === "done" && t.part && t.part.next && !t.undone)
     h += T('<p class="muted small">這篇很長，一次整理一部分（第 ') + (t.part.i + 1) + T(" 部分，共 ") + t.part.n + T("），每部分的重點抓得比整篇一次完整。</p>") +
@@ -1970,7 +1970,7 @@ function turnHtml(t) {
   }
   if (t.status !== "writing" && usageHtml(t)) h += '<div class="ai-meta">' + usageHtml(t) + "</div>";
   if (t.status === "writing") h += '<div class="ai-acts"><button data-stop="' + esc(t.id) + T('">停止</button></div>');
-  else if (t.status === "done") h += '<div class="ai-acts"><button data-save="' + AI.turns.indexOf(t) + T('">存成分析頁</button>') +
+  else if (t.status === "done") h += '<div class="ai-acts"><button data-save="' + AI.turns.indexOf(t) + T('" title="把這個回答整理成知識庫裡的一頁，之後搜尋得到">存進知識庫</button>') +
     (t.ctx && !t.ctx.private && mine(t.ctx.path) ? '<button data-ingest="' + esc(t.ctx.path) + T('">整理「') + esc(t.ctx.title) + T("」</button>") : "") + "</div>";
   return h + "</div></div>";
 }

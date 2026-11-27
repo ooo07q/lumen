@@ -2882,6 +2882,7 @@ def agent_act(job, note):
             if old is not None:
                 keep_version(rel, old, force=True)
         job["changes"] = changes
+        save_run(job)
         now = outside_snapshot()
         job["outside"] = sorted(r for r in set(outside) | set(now) if outside.get(r) != now.get(r))
         job["report"] = job["text"]
@@ -3085,7 +3086,7 @@ def api_agent_start(body):
         used = [v.by_rel[r].name for r in body.get("sources") or [] if r in v.by_rel and v.by_rel[r].name in v.sendable]
         text = ("Task: file this answer as an analysis page.\n\nQuestion: %s\n\nPages the answer drew on: %s\n\n"
                 "The answer:\n<answer>\n%s\n</answer>" % (q, ", ".join("[[%s]]" % u for u in used) or "(none)", answer[:30000]))
-        label = "存成分析頁：%s" % q[:40]
+        label = "存進知識庫：%s" % q[:40]
     elif task == "lint":
         text = "Task: check the wiki."
         label = "檢查知識庫"
@@ -3160,12 +3161,43 @@ def agent_view(job):
     return out
 
 
+# What 全部復原 and the diffs need from a run that changed the knowledge base (the pages it touched, as they were
+# before) is also kept in .lumen/runs/<id>.json, so they still work after a refresh or a restart.
+RUN_ID = re.compile(r"^[0-9a-f]{12}$")
+
+
+def run_file(jid):
+    return os.path.join(VAULT, ".lumen", "runs", jid + ".json")
+
+
+def save_run(job):
+    if not job.get("changes") or READ_ONLY:
+        return
+    rec = {"id": job["id"], "changes": job["changes"], "undone": job["undone"],
+           "before": {c["path"]: job["before"].get(c["path"]) for c in job["changes"]}}
+    try:
+        os.makedirs(os.path.dirname(run_file(job["id"])), exist_ok=True)
+        tmp = run_file(job["id"]) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, ensure_ascii=False)
+        os.replace(tmp, run_file(job["id"]))
+    except OSError:
+        pass
+
+
 def agent_job(body_or_q):
     jid = body_or_q.get("id")
-    jid = jid[0] if isinstance(jid, list) else jid
-    job = AGENT_JOBS.get(str(jid or ""))
+    jid = str((jid[0] if isinstance(jid, list) else jid) or "")
+    job = AGENT_JOBS.get(jid)
     if job and job["vault"] != VAULT:
         return None
+    if not job and RUN_ID.match(jid) and os.path.isfile(run_file(jid)):
+        try:
+            rec = json.load(open(run_file(jid), encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        job = {"id": jid, "vault": VAULT, "changes": rec.get("changes") or [], "before": rec.get("before") or {},
+               "undone": bool(rec.get("undone")), "saved_run": True}
     return job
 
 
@@ -3228,6 +3260,7 @@ def api_agent_undo(body):
                 os.makedirs(os.path.dirname(full), exist_ok=True)
                 write_text(full, old)
         job["undone"] = True
+        save_run(job)
         V.fresh()
     return 200, {"ok": True}
 

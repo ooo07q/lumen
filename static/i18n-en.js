@@ -75,7 +75,6 @@ const LUMEN_EN = {
 "\">停止</button></div>": "\">Stop</button></div>",
 "\">全部</button>": "\">All</button>",
 "\">全部復原</button></div>": "\">Undo all</button></div>",
-"\">存成分析頁</button>": "\">Save as an analysis page</button>",
 "\">差異</button></div>": "\">Diff</button></div>",
 "\">復原</button>": "\">Undo</button>",
 "\">打開一個資料夾…</button></div>": "\">Open a folder…</button></div>",
@@ -307,7 +306,6 @@ const LUMEN_EN = {
 "在這裡新增筆記": "New note here",
 "好": "OK",
 "存在 Lumen": "Saved in Lumen",
-"存成分析頁": "Save as an analysis page",
 "工作": "Task",
 "已下載 ": "Downloaded ",
 "已儲存 ": "Saved ",
@@ -538,7 +536,6 @@ const LUMEN_EN = {
 "只能整理你自己的筆記": "Only your own notes can be organised",
 "日記不交給 AI": "The journal isn't given to the AI",
 "沒有問題或回答": "No question or answer",
-"存成分析頁：%s": "Save as an analysis page: %s",
 "不認得的工作": "Unknown task",
 "沒有這個工作": "No such task",
 "這個計畫不能執行了": "This plan can no longer run",
@@ -788,5 +785,8 @@ const LUMEN_EN = {
 "對話": "Chat",
 "對話紀錄": "History",
 "移到垃圾桶了。": "Moved to the trash.",
-"（沒有標題）": "(untitled)"
+"（沒有標題）": "(untitled)",
+"存進知識庫": "Save to knowledge base",
+"\" title=\"把這個回答整理成知識庫裡的一頁，之後搜尋得到\">存進知識庫</button>": "\" title=\"Turn this answer into a page in your knowledge base, so search can find it later\">Save to knowledge base</button>",
+"存進知識庫：%s": "Save to knowledge base: %s"
 };

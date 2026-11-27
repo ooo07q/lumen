@@ -280,8 +280,10 @@ body.resizing iframe { pointer-events: none; }
 .icon-btn .fill { opacity: 0; }
 .icon-btn.on .fill { opacity: .55; }
 #toggle-right { margin-left: auto; }
-.jev-state { margin-left: auto; }
-.jev-state + #toggle-right { margin-left: 0; }
+.jev-state { margin-left: 0; }
+#toggle-right { margin-left: auto; }
+.brand { min-width: 0; }
+#view-btn { margin-left: -8px; }
 .tree .row { position: relative; }
 .tree .row-del { display: none; border: none; padding: 1px 3px; margin-left: auto; color: var(--muted); border-radius: 4px; line-height: 0; flex: none; }
 .tree .row:hover .row-del { display: inline-flex; }
