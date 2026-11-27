@@ -84,8 +84,7 @@ a:hover { text-decoration: underline; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; }
 .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
 .search { flex: 1; position: relative; max-width: 640px; }
-.search input { width: 100%; height: 34px; padding: 0 12px 0 32px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--text); font: inherit;
-  transition: border-color 150ms ease, box-shadow 150ms ease; }
+.search input { width: 100%; height: 34px; padding: 0 12px 0 32px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--text); font: inherit; }
 .search input::placeholder { color: var(--muted); }
 .search::before { content: ""; position: absolute; left: 11px; top: 10px; width: 14px; height: 14px; background: var(--muted); pointer-events: none;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='7' cy='7' r='5' fill='none' stroke='black' stroke-width='1.6'/%3E%3Cpath d='M11 11l3.5 3.5' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
@@ -109,8 +108,7 @@ a:hover { text-decoration: underline; }
 .tabs button:active:not(:disabled) { transform: none; }
 .tabs button.on { color: var(--text); background: var(--bg); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 @media (hover: hover) and (pointer: fine) { .tabs button:not(.on):hover { color: var(--text); } }
-.filter { margin: 0 8px 8px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px;
-  transition: border-color 150ms ease, box-shadow 150ms ease; }
+.filter { margin: 0 8px 8px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
 .filter:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .tree { overflow: auto; padding: 0 4px 24px; flex: 1; font-size: 13px; }
 .tree .folder > .row { font-weight: 500; }
@@ -463,7 +461,7 @@ h1.renamable:hover { background: var(--panel); }
 .ai-ctx { font-size: 12px; margin-bottom: 6px; min-height: 20px; }
 .chip.ctx { display: inline-flex; align-items: center; gap: 4px; }
 .chip.ctx button { border: none; padding: 0 2px; color: var(--muted); }
-#ai-input { width: 100%; box-sizing: border-box; resize: none; font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--bg); transition: border-color 150ms ease, box-shadow 150ms ease; color: var(--text); }
+#ai-input { width: 100%; box-sizing: border-box; resize: none; font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--bg); color: var(--text); }
 #ai-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .ai-send-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; }
 .quick .ai-row .qt { color: var(--accent); font-weight: 600; }
@@ -638,6 +636,7 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 /* ---- step 3: motion. Only things opened by a click: menus, dialogs, toasts. Typing, search results,
    the @ menu, tabs and panels stay instant (they happen many times a day). Entry only; closing is instant. ---- */
 .menu { transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out); }
+.menu.instant { transition: none; }   /* right-click menus: dozens a day, and Mac context menus appear at once */
 @starting-style { .menu:not([hidden]) { opacity: 0; transform: scale(0.97); } }
 .modal-back, .cn-back { transition: opacity 200ms ease; }
 @starting-style { .modal-back:not([hidden]), .cn-back:not([hidden]) { opacity: 0; } }

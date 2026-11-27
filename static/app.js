@@ -487,8 +487,9 @@ async function htmlToNote(path, btn) {
 }
 
 // right-click menu on files and tabs
-function showMenu(x, y, items, from) {             // from: the trigger point it grows out of (default x, y)
+function showMenu(x, y, items, from, instant) {    // from: the trigger point it grows out of (default x, y); instant: a right-click menu, no entry motion
   const m = $("#menu");
+  m.classList.toggle("instant", !!instant);
   m.innerHTML = items.map((it, i) => it ? '<button data-i="' + i + '"' + (it.danger ? ' class="danger"' : "") + ">" + esc(it.label) + "</button>" : "<hr>").join("");
   m.hidden = false;
   const r = { width: m.offsetWidth, height: m.offsetHeight };   // its real size (the entry animation starts it scaled)
@@ -506,7 +507,7 @@ tree.addEventListener("contextmenu", e => {
   const f = e.target.closest(".row[data-folder]");
   if (f && !S.tree.read_only) {
     e.preventDefault();
-    showMenu(e.clientX, e.clientY, [{ label: T("在這裡新增筆記"), fn: () => newNote(f.dataset.folder) }]);
+    showMenu(e.clientX, e.clientY, [{ label: T("在這裡新增筆記"), fn: () => newNote(f.dataset.folder) }], null, true);
     return;
   }
   const r = e.target.closest(".row[data-path]");
@@ -519,7 +520,7 @@ tree.addEventListener("contextmenu", e => {
     if (/\.md$/.test(p)) items.push({ label: T("版本紀錄…"), fn: () => showHistory(p) });
     items.push({ label: T("刪除…"), danger: true, fn: () => deleteFile(p) });
   }
-  showMenu(e.clientX, e.clientY, items);
+  showMenu(e.clientX, e.clientY, items, null, true);
 });
 
 // ============================================================ tabs
@@ -549,7 +550,7 @@ $("#tabbar").addEventListener("contextmenu", e => {
   const i = +el.dataset.i, t = S.tabs[i];
   showMenu(e.clientX, e.clientY, [{ label: T("關閉"), fn: () => closeTab(S.tabs.indexOf(t)) },
     { label: T("關閉其他分頁"), fn: () => { for (let j = S.tabs.length - 1; j >= 0; j--) if (S.tabs[j] !== t && !S.tabs[j].dirty) closeTab(j); } },
-    { label: T("關閉右邊的分頁"), fn: () => { for (let j = S.tabs.length - 1; j > S.tabs.indexOf(t); j--) if (!S.tabs[j].dirty) closeTab(j); } }]);
+    { label: T("關閉右邊的分頁"), fn: () => { for (let j = S.tabs.length - 1; j > S.tabs.indexOf(t); j--) if (!S.tabs[j].dirty) closeTab(j); } }], null, true);
 });
 // drag a tab to reorder; the active tab stays active wherever it goes
 let dragTab = null;
