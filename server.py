@@ -21,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -3361,17 +3362,83 @@ def api_reveal(body):
     return 200, {"ok": True}
 
 
+
+# ------------------------------------------------------------------ AI conversations
+# Each conversation in the AI panel is kept as .lumen/chats/<id>.json in the vault (hidden; stays on this computer):
+# the questions, answers and which pages they used, not the material sent with them. Deleting one moves it to
+# the vault's trash.
+CHAT_ID = re.compile(r"^[a-z0-9-]{8,40}$")
+CHAT_MAX = 2_000_000
+
+
+def chats_dir():
+    return os.path.join(VAULT, ".lumen", "chats")
+
+
+def api_chats(q):
+    d, out = chats_dir(), []
+    for f in os.listdir(d) if os.path.isdir(d) else []:
+        if not f.endswith(".json"):
+            continue
+        try:
+            c = json.load(open(os.path.join(d, f), encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        out.append({"id": f[:-5], "title": c.get("title") or "", "updated": c.get("updated") or 0, "n": len(c.get("turns") or [])})
+    out.sort(key=lambda c: -c["updated"])
+    return 200, {"chats": out}
+
+
+def api_chat(q):
+    cid = q.get("id", [""])[0]
+    f = os.path.join(chats_dir(), cid + ".json")
+    if not CHAT_ID.match(cid) or not os.path.isfile(f):
+        return 404, {"error": "沒有這段對話"}
+    return 200, json.load(open(f, encoding="utf-8"))
+
+
+def api_chat_save(body):
+    cid, turns = str(body.get("id") or ""), body.get("turns")
+    if READ_ONLY:
+        return 403, {"error": "這個筆記庫是唯讀的"}
+    if not CHAT_ID.match(cid) or not isinstance(turns, list) or not turns:
+        return 400, {"error": "對話格式不對"}
+    first = next((t for t in turns if isinstance(t, dict) and (t.get("q") or t.get("label"))), {})
+    c = {"id": cid, "title": str(first.get("q") or first.get("label") or "")[:80], "updated": time.time(), "turns": turns}
+    data = json.dumps(c, ensure_ascii=False)
+    if len(data) > CHAT_MAX:
+        return 413, {"error": "對話太長，存不下"}
+    os.makedirs(chats_dir(), exist_ok=True)
+    full = os.path.join(chats_dir(), cid + ".json")
+    tmp = full + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(data)
+    os.replace(tmp, full)
+    return 200, {"ok": True}
+
+
+def api_chat_delete(body):
+    cid = str(body.get("id") or "")
+    f = os.path.join(chats_dir(), cid + ".json")
+    if READ_ONLY or not CHAT_ID.match(cid) or not os.path.isfile(f):
+        return 404, {"error": "沒有這段對話"}
+    os.makedirs(TRASH, exist_ok=True)
+    shutil.move(f, os.path.join(TRASH, "Lumen 對話 %s.json" % cid))
+    return 200, {"ok": True}
+
+
 GET = {"/api/tree": api_tree, "/api/changes": api_changes, "/api/note": api_note, "/api/panel": api_panel,
        "/api/search": api_search, "/api/queue": api_queue, "/api/history": api_history,
        "/api/attachments": api_attachments, "/api/t2s": api_t2s, "/api/ai/poll": api_ai_poll,
-       "/api/agent/poll": api_agent_poll, "/api/agent/diff": api_agent_diff}
+       "/api/agent/poll": api_agent_poll, "/api/agent/diff": api_agent_diff,
+       "/api/chats": api_chats, "/api/chat": api_chat}
 POST = {"/api/check": api_check, "/api/dismiss": api_dismiss, "/api/save": api_save,
         "/api/journal": api_journal, "/api/attach": api_attach, "/api/move": api_move,
         "/api/delete": api_delete, "/api/html2note": api_html2note, "/api/restore": api_restore, "/api/import": api_import,
         "/api/new": api_new, "/api/rename": api_rename, "/api/history/restore": api_history_restore,
         "/api/reveal": api_reveal, "/api/ai/ask": api_ai_ask, "/api/ai/stop": api_ai_stop, "/api/ai/related": api_ai_related, "/api/jev/pause": api_jev_pause,
         "/api/agent/start": api_agent_start, "/api/agent/approve": api_agent_approve, "/api/agent/stop": api_agent_stop,
-        "/api/agent/undo": api_agent_undo}
+        "/api/agent/undo": api_agent_undo, "/api/chat/save": api_chat_save, "/api/chat/delete": api_chat_delete}
 # these work with no vault open
 GET_APP = {"/api/vaults": api_vaults, "/api/browse": api_browse}
 POST_APP = {"/api/vault/open": api_vault_open, "/api/vault/create": api_vault_create, "/api/pdf/setup": api_pdf_setup, "/api/vault/forget": api_vault_forget}

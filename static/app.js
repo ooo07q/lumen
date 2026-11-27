@@ -1349,7 +1349,8 @@ function renderJevState() {
 
 async function refreshTree() {
   const t = await api("/api/tree");
-  S.tree = t; window.TREE = t;
+  const first = !S.tree; S.tree = t; window.TREE = t;
+  if (first && !AI.turns.length) { const last = store.get(lastChatKey(), null); if (last) openChat(last); }
   // the switch lives in the app's settings; the first time, it takes the state this browser had
   if (typeof t.jev_paused === "boolean") S.jevOn = !t.jev_paused;
   else if (t.jev) api("/api/jev/pause", { paused: !S.jevOn }).catch(() => {});
@@ -1725,7 +1726,45 @@ $("#brand").addEventListener("click", async e => {
 // The app finds the pages (Jev, or keywords with Jev off) and sends them with the open note (never the journal);
 // Claude Code, with no tools, writes the answer with [[page]] citations.
 
-const AI = { turns: [], ctx: undefined, attach: [] };   // ctx undefined: follow the open note; null: none. attach: files picked with @
+const AI = { turns: [], ctx: undefined, attach: [], id: null, saved: "", list: null };   // ctx undefined: follow the open note; null: none. attach: files picked with @
+
+// ---------- conversations are kept in the vault (.lumen/chats), so a refresh or a restart brings them back.
+// A turn is saved once it has finished; what was sent with it isn't (only the question, answer and pages used).
+const TURN_END = ["done", "error", "stopped", "cancelled"];
+const lastChatKey = () => "ai-last:" + (S.tree ? S.tree.vault_path : "");
+let chatTimer = 0;
+function saveChat() {
+  if (!S.tree || S.tree.read_only) return;
+  const turns = AI.turns.filter(t => TURN_END.includes(t.status)).map(t => { const c = Object.assign({}, t); delete c.live; return c; });
+  if (!turns.length) return;
+  if (!AI.id) AI.id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  const sig = AI.id + JSON.stringify(turns);
+  if (sig === AI.saved) return;
+  clearTimeout(chatTimer);
+  chatTimer = setTimeout(() => {
+    api("/api/chat/save", { id: AI.id, turns }).then(() => { AI.saved = sig; store.set(lastChatKey(), AI.id); }).catch(() => {});
+  }, 400);
+}
+async function openChat(id) {
+  try {
+    const c = await api("/api/chat?id=" + encodeURIComponent(id));
+    AI.turns = (c.turns || []).map(t => Object.assign(t, { restored: true }));
+    AI.id = id; AI.saved = id + JSON.stringify(c.turns); AI.list = null; AI.ctx = undefined; AI.attach = [];
+    store.set(lastChatKey(), id);
+  } catch (e) { store.set(lastChatKey(), null); }
+  renderAI();
+}
+async function showChats() {
+  try { AI.list = (await api("/api/chats")).chats; } catch (e) { toast(e.message); return; }
+  renderAI();
+}
+function chatListHtml() {
+  if (!AI.list.length) return T('<p class="muted pad">還沒有存下來的對話。</p>');
+  const when = x => new Date(x * 1000).toLocaleString(document.documentElement.lang || "zh-Hant", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return '<div class="chat-list">' + AI.list.map(c => '<div class="chat-row' + (c.id === AI.id ? " on" : "") + '"><button class="chat-open" data-chat="' + esc(c.id) + '"><span class="chat-t">' +
+    esc(c.title || T("（沒有標題）")) + '</span><span class="muted small">' + when(c.updated) + "</span></button>" +
+    '<button class="ghost chat-del" data-chat-del="' + esc(c.id) + T('" title="刪除這段對話（移到垃圾桶）">×</button></div>')).join("") + "</div>";
+}
 const CLAUDE_MODELS = [["auto", T("Claude：自動（Jev 選）")], ["haiku", T("Claude Haiku：快、省")], ["sonnet", T("Claude Sonnet：一般")], ["opus", T("Claude Opus：最強、最耗額度")]];
 const GPT_TIER = { fast: T("快、省"), balanced: T("一般"), strong: T("最強、最耗額度") };
 let GPT_MODELS = [];          // the models the user's ChatGPT plan offers, from its catalogue (costs no usage)
@@ -1783,6 +1822,7 @@ async function askAI(q) {
   input.value = ""; quick.hidden = true; input.blur();
   if ($("#ai-input")) $("#ai-input").value = "";
   showRight("ai");
+  AI.list = null;
   const turn = { q, ctx: aiContext(), attach: AI.attach.slice(), status: "finding", sources: [], text: "" };
   AI.turns.push(turn); renderAI();
   const jev = jevUsable();
@@ -1823,6 +1863,7 @@ async function startAgent(task, extra) {
   if (S.tree.read_only) return toast(T("這個筆記庫只能看，不能改。"));
   showRight("ai");
   const m = aiModel(), e = aiEffort(), gpt = isGpt(m);
+  AI.list = null;
   const turn = { kind: "agent", task, status: "starting", steps: [] };
   AI.turns.push(turn); renderAI();
   const body = Object.assign({ task, provider: gpt ? "chatgpt" : "claude", model: gpt ? m : m === "auto" ? null : m,
@@ -1892,7 +1933,7 @@ function agentHtml(t) {
       ch.map(c => '<div class="ag-ch"><span class="ag-k ' + c.kind + '">' + KIND[c.kind] + "</span>" + '<a class="wl" data-path="' + esc(c.path) + '">' + esc(c.path.replace(/^wiki\//, "").replace(/\.md$/, "")) + "</a>" +
         '<button class="ghost" data-ag-diff="' + esc(c.path) + '" data-ag-id="' + esc(t.id) + T('">差異</button></div>')).join("") + "</div>";
     if ((t.outside || []).length) h += T('<div class="banner">注意：這段時間知識庫以外也有檔案變了（可能是你自己改的）：') + t.outside.slice(0, 5).map(esc).join(T("、")) + "</div>";
-    if (ch.length && !t.undone) h += '<div class="ai-acts"><button data-ag-undo="' + esc(t.id) + T('">全部復原</button></div>');
+    if (ch.length && !t.undone && !t.restored) h += '<div class="ai-acts"><button data-ag-undo="' + esc(t.id) + T('">全部復原</button></div>');
   }
   if (t.status === "done" && t.part && t.part.next && !t.undone)
     h += T('<p class="muted small">這篇很長，一次整理一部分（第 ') + (t.part.i + 1) + T(" 部分，共 ") + t.part.n + T("），每部分的重點抓得比整篇一次完整。</p>") +
@@ -1962,7 +2003,10 @@ function renderAI() {
       '<div class="ai-examples">' + ex.map(x => '<button data-example="' + esc(x) + '">' + esc(x) + "</button>").join("") + "</div></div>";
   }
   conv += AI.turns.map(turnHtml).join("");
-  el.innerHTML = T('<div class="ai-head"><span>對話</span>') + (AI.turns.length ? T('<button class="ghost" data-new>新對話</button>') : "") + "</div>" +
+  if (AI.list) conv = chatListHtml();
+  el.innerHTML = '<div class="ai-head"><span>' + (AI.list ? T("對話紀錄") : T("對話")) + "</span><span>" +
+    (AI.list ? T('<button class="ghost" data-chats-close>回到對話</button>') : T('<button class="ghost" data-chats>對話紀錄</button>')) +
+    (AI.turns.length || AI.list ? T('<button class="ghost" data-new>新對話</button>') : "") + "</span></div>" +
     '<div class="ai-conv" id="ai-conv">' + conv + "</div>" +
     '<div class="ai-composer"><div id="ai-at" class="ai-at" hidden></div><div id="ai-ctx" class="ai-ctx"></div>' +
     T('<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行，@ 加入檔案）"></textarea>') +
@@ -1974,6 +2018,7 @@ function renderAI() {
   const c = $("#ai-conv"); if (atBottom) c.scrollTop = c.scrollHeight; else if (conv0) c.scrollTop = conv0.scrollTop;
   updateAICtx();
   if (focused && AT.start >= 0) { inp.selectionStart = inp.selectionEnd = caret0; renderAt(inp); }   // a redraw (the connection check) mustn't close the @ list
+  saveChat();
 }
 
 function updateAICtx() {
@@ -2023,7 +2068,18 @@ $("#ai").addEventListener("click", e => {
   if (b.hasAttribute("data-ctx-off")) { AI.ctx = null; updateAICtx(); return; }
   if (b.dataset.atOff) { AI.attach = AI.attach.filter(a => a.path !== b.dataset.atOff); updateAICtx(); return; }
   if (b.hasAttribute("data-ctx-on")) { AI.ctx = undefined; updateAICtx(); return; }
-  if (b.hasAttribute("data-new")) { AI.turns = []; AI.ctx = undefined; AI.attach = []; renderAI(); return; }
+  if (b.hasAttribute("data-new")) { AI.turns = []; AI.ctx = undefined; AI.attach = []; AI.id = null; AI.saved = ""; AI.list = null; store.set(lastChatKey(), null); renderAI(); return; }
+  if (b.hasAttribute("data-chats")) return showChats();
+  if (b.hasAttribute("data-chats-close")) { AI.list = null; renderAI(); return; }
+  if (b.dataset.chat) return openChat(b.dataset.chat);
+  if (b.dataset.chatDel) {
+    const id = b.dataset.chatDel;
+    api("/api/chat/delete", { id }).then(() => {
+      if (id === AI.id) { AI.turns = []; AI.id = null; AI.saved = ""; store.set(lastChatKey(), null); }
+      showChats(); toast(T("移到垃圾桶了。"));
+    }).catch(err => toast(err.message));
+    return;
+  }
   if (b.id === "ai-send") { askAI($("#ai-input").value); return; }
 });
 // ---------- @ in the chat box: pick files (notes, knowledge pages) to send as background with the question.

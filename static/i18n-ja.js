@@ -111,7 +111,6 @@ const LUMEN_JA = {
 "<div class=\"ai-a muted\"><span class=\"spin\"></span> 交給 Claude…</div></div>": "<div class=\"ai-a muted\"><span class=\"spin\"></span> Claude に渡しています…</div></div>",
 "<div class=\"ai-a muted\"><span class=\"spin\"></span> 找相關的頁…</div></div>": "<div class=\"ai-a muted\"><span class=\"spin\"></span> 関連するページを探しています…</div></div>",
 "<div class=\"ai-ctxline\">背景：": "<div class=\"ai-ctxline\">背景：",
-"<div class=\"ai-head\"><span>對話</span>": "<div class=\"ai-head\"><span>会話</span>",
 "<div class=\"ai-intro\"><h3>✦ 問 AI</h3><p>在上面的搜尋框打問題按 ⌘↵，或在下面直接問。Lumen 先找出相關的頁，連同目前打開的筆記交給 AI，回答裡的頁面都能點。</p>": "<div class=\"ai-intro\"><h3>✦ AI に質問</h3><p>上の検索ボックスに質問を入力して ⌘↵ を押すか、下で直接質問してください。Lumen が関連するページを探し、開いているノートと一緒に AI に渡します。回答に出てくるページはどれもクリックできます。</p>",
 "<div class=\"ai-meta\">已停止。": "<div class=\"ai-meta\">停止しました。",
 "<div class=\"ai-meta\">已停止。</div>": "<div class=\"ai-meta\">停止しました。</div>",
@@ -781,5 +780,13 @@ const LUMEN_JA = {
 "改 %s": "%s を編集",
 "找 %s": "%s を検索",
 "<div class=\"muted\"><span class=\"spin\"></span> AI 正在讀這篇，規劃怎麼整理…</div>": "<div class=\"muted\"><span class=\"spin\"></span> AIがこのノートを読み、整理の仕方を考えています…</div>",
-"<div class=\"muted\"><span class=\"spin\"></span> AI 正在寫摘要、補進相關的頁…</div>": "<div class=\"muted\"><span class=\"spin\"></span> AIが要約を書き、関連ページに追記しています…</div>"
+"<div class=\"muted\"><span class=\"spin\"></span> AI 正在寫摘要、補進相關的頁…</div>": "<div class=\"muted\"><span class=\"spin\"></span> AIが要約を書き、関連ページに追記しています…</div>",
+"\" title=\"刪除這段對話（移到垃圾桶）\">×</button></div>": "\" title=\"この会話を削除（ゴミ箱へ移動）\">×</button></div>",
+"<button class=\"ghost\" data-chats-close>回到對話</button>": "<button class=\"ghost\" data-chats-close>会話に戻る</button>",
+"<button class=\"ghost\" data-chats>對話紀錄</button>": "<button class=\"ghost\" data-chats>会話の履歴</button>",
+"<p class=\"muted pad\">還沒有存下來的對話。</p>": "<p class=\"muted pad\">保存された会話はまだありません。</p>",
+"對話": "会話",
+"對話紀錄": "会話の履歴",
+"移到垃圾桶了。": "ゴミ箱に移動しました。",
+"（沒有標題）": "（タイトルなし）"
 };
