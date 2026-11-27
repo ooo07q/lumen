@@ -1652,13 +1652,22 @@ $("#brand").addEventListener("click", async e => {
   let v;
   try { v = await api("/api/vaults"); } catch (err) { return; }
   const r = $("#brand").getBoundingClientRect();
-  const items = v.vaults.filter(x => x.exists).slice(0, 8).map(x => ({ label: (x.path === v.current ? "✓ " : T("　 ")) + x.name, fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
-  items.push(null, { label: T("打開其他資料夾…"), fn: () => showStart("open") }, { label: T("建立新的筆記庫…"), fn: () => showStart("create") },
-    { label: T("管理清單…"), fn: () => showStart() }, null, { label: T("✦ 連接 AI…"), fn: () => showConnect() },
+  // only what matters now: this vault and the last few others (same-named ones show their folder), one row for
+  // the rest; the languages behind one row
+  const recent = v.vaults.filter(x => x.exists && x.path !== v.current).slice(0, 3);
+  const cur = v.vaults.find(x => x.path === v.current);
+  const shown = (cur ? [cur] : []).concat(recent);
+  const dup = name => shown.filter(x => x.name === name).length > 1;
+  const where = x => x.path.split("/").slice(-2, -1)[0] || "";
+  const items = shown.map(x => ({ label: (x.path === v.current ? "✓ " : T("　 ")) + x.name + (dup(x.name) ? "（" + where(x) + "）" : ""),
+    fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
+  items.push({ label: T("　 ") + T("其他筆記庫…"), fn: () => showStart() }, null,
+    { label: T("✦ 連接 AI…"), fn: () => showConnect() },
     { label: T("✦ 請 AI 檢查知識庫…"), fn: () => startAgent("lint", {}) },
-    { label: T("在 Finder 中顯示"), fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) },
-    null, ...Object.entries(LANGS).map(([k, name]) => ({ label: (k === LANG && chosenLang() ? "✓ " : T("　 ")) + name, fn: () => k !== LANG && setLang(k) })),
-    { label: (chosenLang() ? T("　 ") : "✓ ") + T("語言") + T("：") + T("跟隨系統"), fn: () => chosenLang() && setLang("") });
+    { label: T("在 Finder 中顯示"), fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) }, null,
+    { label: T("語言") + T("：") + LANGS[LANG] + " ›", fn: () => setTimeout(() => showMenu(r.left, r.bottom + 4, [
+      ...Object.entries(LANGS).map(([k, name]) => ({ label: (k === LANG && chosenLang() ? "✓ " : T("　 ")) + name, fn: () => k !== LANG && setLang(k) })),
+      null, { label: (chosenLang() ? T("　 ") : "✓ ") + T("跟隨系統"), fn: () => chosenLang() && setLang("") }]), 0) });
   showMenu(r.left, r.bottom + 4, items);
 });
 
@@ -1878,21 +1887,14 @@ function turnHtml(t) {
 }
 
 const cap = m => m ? m[0].toUpperCase() + m.slice(1) : "";
-// What a run used: tokens, and how much of the subscription's usage windows went (the change between the first and
-// the latest percentage Claude Code or ChatGPT reported while it ran)
+// What a run used, roughly: tokens (a compact number), and how much the account's 5-hour window went up. Both come
+// with the answer Claude Code or ChatGPT already sends; nothing extra is asked.
 function usageHtml(t) {
-  const tk = t.tokens || {}, q = t.quota || {}, parts = [];
+  const tk = t.tokens || {}, w = (t.quota || {})["5h"], parts = [];
   const n = (tk.in || 0) + (tk.out || 0);
-  if (n) parts.push('<span title="' + T("token 是 AI 計算用量的單位，一個中文字大約 1 到 2 個 token。包括 AI 讀進去的筆記和它寫出來的字。") + '">' +
-    T("用了 ") + n.toLocaleString() + T(" 個 token") + "</span>");
-  for (const [k, label] of [["5h", T("帳號的 5 小時額度")], ["week", T("帳號的每週額度")]]) {
-    const w = q[k];
-    if (!w) continue;
-    const d = Math.max(0, w.end - w.start);
-    parts.push('<span title="' + T("訂閱方案每 5 小時和每週各有一份用量上限，百分比是整個 Claude（或 ChatGPT）帳號已經用掉多少，不只 Lumen。這裡是開始和結束時的差：同一段時間你在終端機或別的 app 用 AI，也會算進來，而且只精確到 1%。當作大概參考就好；要比較兩次各花多少，看 token 數比較準。") + '">' +
-      label + (d >= 1 ? T("這段時間多用了約 ") + Math.round(d) + "%" : T("這段時間多用了不到 1%")) + T("（目前 ") + Math.round(w.end) + "%）</span>");
-  }
-  return parts.join(" · ");
+  if (n) parts.push(T("約 ") + new Intl.NumberFormat(document.documentElement.lang || "zh-Hant", { notation: "compact", maximumFractionDigits: 1 }).format(n) + T(" token"));
+  if (w) { const d = Math.round(Math.max(0, w.end - w.start)); parts.push(T("5 小時額度 ") + (d >= 1 ? "+" + d + "%" : T("不到 1%"))); }
+  return parts.length ? '<span title="' + T("大概的用量。額度是整個帳號的，同時在別處用 AI 也會算進來。") + '">' + parts.join(" · ") + "</span>" : "";
 }
 document.addEventListener("change", e => {
   if (e.target.id === "ai-model") setPref("aiModel", e.target.value);
