@@ -118,3 +118,47 @@ AI：
 - 驗收：語法檢查、i18n 0 缺漏、WebKit 深淺色截圖。
 
 第 2 步（F → A → B → C → D → E → G）完成。
+
+## 開始畫面：清空最近用過的清單
+
+2026-11-27。`server.py` 的 `/api/vault/forget` 多一個 `{"all": true}`：只留正在用的筆記庫，資料夾本身不動。開始畫面「最近用過」右邊有「清空清單」。英日韓翻譯已加。順手清掉了測試時留在清單裡的暫存筆記庫（`/private/tmp/…`）。
+
+## 第 3 步：動畫（流程 5，animate、choreograph）
+
+2026-11-27。`static/style.css` 加一段，`app.js` 的 `showMenu` 加一行（選單從點的位置長出來）。
+
+先判斷要不要動（STANDARDS.md 頻率表）：
+
+| 元素 | 決定 | 理由 |
+|---|---|---|
+| 選單（筆記庫、⋯、右鍵） | 動：150ms，`--ease-out`，opacity 0 + scale(0.97)，從點擊的位置長出 | 偶爾用；滑鼠點開 |
+| 對話框、連接 AI | 動：200ms，`--ease-out`，scale(0.97)，置中；遮罩 200ms 淡入 | 偶爾用 |
+| 提示訊息 | 動：400ms `ease`，往上 8px + 淡入 | 和 Sonner 一致 |
+| 搜尋快速結果、@ 選單 | 不動 | 打字時出現，一天上百次 |
+| 分頁、左欄切換、右欄區塊 | 不動 | 頻繁；展開收合要動高度，費效能 |
+| 關閉 | 一律立刻消失 | 關閉不需要提示 |
+
+- 用 CSS transition 加 `@starting-style`：可中斷，不用 JS 計時；不支援的瀏覽器只是沒有動畫。
+- 減少動態（prefers-reduced-motion）：只留淡入，不縮放、不位移。
+- 驗收：
+  - 無頭 WebKit 和 Chrome 都會凍結所有 transition（對照組的一般 transition 也停在起點），量不到過程；改用 `document.getAnimations()` 確認共 7 個動畫、時長正確（選單 150、對話框 200、提示 400），`finish()` 後終點都是 opacity 1、沒有殘留 transform。之前截圖裡「選單關了還隱約看得到」也是這個原因。
+  - 編輯器（`wys.js`）沒動，不需要往返測試。
+  - 語法檢查、i18n 0 缺漏。
+
+## 第 4 步：動畫審查（流程 9，照 STANDARDS.md 自審）
+
+- 時長都在範圍內；沒有 `ease-in`；沒有 `scale(0)`；選單依觸發點縮放，對話框置中。
+- 鍵盤或打字觸發的（快速結果、@ 選單）沒有動畫。
+- 只動 opacity 和 transform，不動版面屬性。
+- 有 reduced motion。
+- 結論：Approve。`/review-animations` 只能你叫，要更嚴的審查可以自己跑一次。
+
+## 第 4 步（續）：`/review-animations` 審查與修正
+
+2026-11-27，由你叫用 `/review-animations`。結論從自審的 Approve 改為先 Block、修完 Approve。修正：
+- ⋯ 選單從按鈕左邊 180px 處長出，右緣也沒對齊按鈕：`showMenu` 多一個觸發點參數，x 給 null 時右緣對齊觸發點，從按鈕右上角長出。
+- 選單量尺寸用 `getBoundingClientRect`，會量到動畫起點的 0.97 倍：改用 `offsetWidth/offsetHeight`；縮放原點限制在選單範圍內。
+- 下載進度條動 `width`（版面屬性、800ms），而且每次更新都重畫元素，transition 從沒跑過：刪掉。
+- 進度條的「忙碌」動畫是連續動作，改 `linear`。
+- 減少動態時：按鈕按下不再縮放、AI 游標不閃。
+- 實機驗證：無頭 Chrome 用真實時間（不開 virtual time，用一張慢圖延後輸出）量到 75ms 時選單 opacity 0.95、對話框 0.88、提示 0.22，700ms 全部完成。之前「量不到」是 virtual time 凍結時鐘造成的。

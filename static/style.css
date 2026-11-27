@@ -392,7 +392,7 @@ h1.renamable:hover { background: var(--panel); }
 .start-card code { font-size: 12px; background: var(--code); padding: 0 4px; border-radius: 3px; }
 .start-close { position: absolute; right: 0; top: 0; width: 32px; height: 32px; padding: 0; font-size: 18px; border: none; border-radius: 8px; color: var(--muted); }
 @media (hover: hover) and (pointer: fine) { .start-close:hover { background: var(--hover); color: var(--text); } }
-.start .group { margin: 18px 0 6px; color: var(--muted); font-size: 12px; }
+.start .group { margin: 18px 0 6px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; align-items: baseline; }
 .vault-list { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .vault-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; transition: background-color 150ms ease; border-top: 1px solid var(--line); }
 .vault-row:first-child { border-top: none; }
@@ -514,10 +514,10 @@ h1.renamable:hover { background: var(--panel); }
 .cn-acts a { margin-left: auto; font-size: 13px; }
 .cn-detail { margin: 6px 0; }
 .cn-progress { position: relative; height: 8px; margin: 10px 0 4px; border-radius: 4px; background: var(--code); overflow: hidden; }
-.cn-progress > span { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .8s ease; }
-.cn-progress[data-busy] > span { width: 30% !important; animation: cn-busy 1.4s ease-in-out infinite; }
+.cn-progress > span { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.cn-progress[data-busy] > span { width: 30% !important; animation: cn-busy 1.4s linear infinite; }
 @keyframes cn-busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
-@media (prefers-reduced-motion: reduce) { .cn-progress > span { transition: none; } .cn-progress[data-busy] > span { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .cn-progress[data-busy] > span { animation: none; } }
 .cn-progress-line { font-variant-numeric: tabular-nums; }
 .cn-detail input { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
 .cn-gpt { background: #000; color: #fff; border-color: #000; }
@@ -628,3 +628,21 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 .chat-row:hover .chat-del, .chat-del:focus-visible { opacity: 1; }
 @media (hover: none) { .chat-del { opacity: 1; } }
 .no-trans, .no-trans * { transition: none !important; }
+
+/* ---- step 3: motion. Only things opened by a click: menus, dialogs, toasts. Typing, search results,
+   the @ menu, tabs and panels stay instant (they happen many times a day). Entry only; closing is instant. ---- */
+.menu { transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out); }
+@starting-style { .menu:not([hidden]) { opacity: 0; transform: scale(0.97); } }
+.modal-back, .cn-back { transition: opacity 200ms ease; }
+@starting-style { .modal-back:not([hidden]), .cn-back:not([hidden]) { opacity: 0; } }
+.modal, .cn { transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out); }
+@starting-style { .modal-back:not([hidden]) .modal, .cn-back:not([hidden]) .cn { opacity: 0; transform: scale(0.97); } }
+.toast { transition: opacity 400ms ease, translate 400ms ease; }
+@starting-style { .toast:not([hidden]) { opacity: 0; translate: 0 8px; } }
+@media (prefers-reduced-motion: reduce) {
+  .menu, .modal, .cn { transition: opacity 150ms ease; }
+  .toast { transition: opacity 200ms ease; }
+  button:active:not(:disabled), .brand:active { transform: none; }   /* press feedback without movement */
+  .ai-caret { animation: none; }
+  @starting-style { .menu:not([hidden]), .modal-back:not([hidden]) .modal, .cn-back:not([hidden]) .cn { transform: none; } .toast:not([hidden]) { translate: none; } }
+}

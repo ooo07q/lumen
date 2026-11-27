@@ -3376,9 +3376,12 @@ def api_vault_create(body):
 
 
 def api_vault_forget(body):
-    """Take a vault off the list (the folder itself is left alone)."""
+    """Take a vault off the list (the folder itself is left alone). {"all": true}: every one but the open vault."""
     s = load_settings()
-    s["vaults"] = [v for v in s["vaults"] if v.get("path") != body.get("path")]
+    if body.get("all"):
+        s["vaults"] = [v for v in s["vaults"] if v.get("path") == VAULT]
+    else:
+        s["vaults"] = [v for v in s["vaults"] if v.get("path") != body.get("path")]
     save_settings(s)
     return 200, {"ok": True}
 

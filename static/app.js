@@ -486,12 +486,16 @@ async function htmlToNote(path, btn) {
 }
 
 // right-click menu on files and tabs
-function showMenu(x, y, items) {
+function showMenu(x, y, items, from) {             // from: the trigger point it grows out of (default x, y)
   const m = $("#menu");
   m.innerHTML = items.map((it, i) => it ? '<button data-i="' + i + '"' + (it.danger ? ' class="danger"' : "") + ">" + esc(it.label) + "</button>" : "<hr>").join("");
   m.hidden = false;
-  const r = m.getBoundingClientRect();
-  m.style.left = Math.min(x, innerWidth - r.width - 8) + "px"; m.style.top = Math.min(y, innerHeight - r.height - 8) + "px";
+  const r = { width: m.offsetWidth, height: m.offsetHeight };   // its real size (the entry animation starts it scaled)
+  if (x == null) x = from[0] - r.width;                           // x null: right edge lines up with the trigger
+  const left = Math.max(8, Math.min(x, innerWidth - r.width - 8)), top = Math.min(y, innerHeight - r.height - 8);
+  m.style.left = left + "px"; m.style.top = top + "px";
+  const [fx, fy] = from || [x, y], clamp = (v, hi) => Math.max(0, Math.min(hi, v));
+  m.style.transformOrigin = clamp(fx - left, r.width) + "px " + clamp(fy - top, r.height) + "px";   // grows out of its trigger
   m.onclick = e => { const b = e.target.closest("button"); if (b) { m.hidden = true; items[+b.dataset.i].fn(); } };
 }
 document.addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("#menu").hidden = true; });
@@ -904,7 +908,7 @@ $("#view").addEventListener("click", e => {
   else if (act === "delete") deleteFile(t.path);
   else if (act === "more") {
     const r = b.getBoundingClientRect();
-    showMenu(r.right - 180, r.bottom + 4, [{ label: T("以前的版本…"), fn: () => showHistory(t.path) }, { label: T("刪除（移到垃圾桶）"), fn: () => deleteFile(t.path) }]);
+    showMenu(null, r.bottom + 4, [{ label: T("以前的版本…"), fn: () => showHistory(t.path) }, { label: T("刪除（移到垃圾桶）"), fn: () => deleteFile(t.path) }], [r.right, r.bottom]);
   }
   else if (act === "history") showHistory(t.path);
   else if (act === "rename") startTitleRename(t);
@@ -1645,7 +1649,7 @@ function renderStart() {
   el.innerHTML = '<div class="start-card">' + (v.current ? T('<button class="start-close" data-s="close" title="回到筆記">×</button>') : "") +
     "<h1>" + (v.current ? T("切換筆記庫") : T("歡迎使用 Lumen")) + "</h1>" +
     T('<p class="muted">筆記庫就是電腦上的一個資料夾，裡面放你的筆記（.md 檔）。Obsidian 的筆記庫也能直接打開。AI 不會改你的筆記；它整理出來的頁放在這個資料夾裡的 <code>wiki</code> 子資料夾。</p>') +
-    (rows ? T('<div class="group">最近用過</div><div class="vault-list">') + rows + "</div>" : "") +
+    (rows ? T('<div class="group">最近用過') + (v.vaults.some(x => x.path !== v.current) ? T('<button class="link-btn" data-forget-all="1" title="資料夾本身不動">清空清單</button>') : "") + '</div><div class="vault-list">' + rows + "</div>" : "") +
     '<div class="start-acts"><button data-s="create" class="' + (mode === "create" ? "primary" : "") + T('">＋ 建立新的筆記庫</button><button data-s="open" class="') + (mode === "open" ? "primary" : "") + T('">打開一個資料夾…</button></div>') +
     '<div id="start-pane"></div></div>';
 }
@@ -1681,6 +1685,7 @@ async function switchVault(action, body) {
 $("#start").addEventListener("click", async e => {
   const b = e.target.closest("button"); if (!b) return;
   if (b.dataset.openVault) return switchVault("/api/vault/open", { path: b.dataset.openVault });
+  if (b.dataset.forgetAll) { await api("/api/vault/forget", { all: true }); startState.v = await api("/api/vaults"); renderStart(); return; }
   if (b.dataset.forget) { await api("/api/vault/forget", { path: b.dataset.forget }); startState.v = await api("/api/vaults"); renderStart(); return; }
   if (b.dataset.browse) return browse(b.dataset.browse);
   const s = b.dataset.s;
