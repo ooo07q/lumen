@@ -77,7 +77,9 @@ const PANEL_SECS = [["suggest", T("建議")], ["organized", T("整理狀況")], 
   ["linked", T("已連結")], ["backlinks", T("誰連到這頁")]];
 function applyView() {
   const r = document.documentElement;
+  r.classList.add("no-trans");                     // a theme switch is instant: no colour fades on every button
   VIEW.theme === "auto" ? r.removeAttribute("data-theme") : r.setAttribute("data-theme", VIEW.theme);
+  void getComputedStyle(r).color; setTimeout(() => r.classList.remove("no-trans"), 0);
   r.dataset.size = VIEW.size; r.dataset.width = VIEW.width; r.dataset.hide = VIEW.hide.join(" ");
   r.classList.toggle("no-help", !VIEW.help); r.classList.toggle("no-summaries", !VIEW.summaries);
 }
