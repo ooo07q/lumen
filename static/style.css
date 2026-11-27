@@ -644,11 +644,24 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 @starting-style { .modal-back:not([hidden]) .modal, .cn-back:not([hidden]) .cn { opacity: 0; transform: scale(0.97); } }
 .toast { transition: opacity 400ms ease, translate 400ms ease; }
 @starting-style { .toast:not([hidden]) { opacity: 0; translate: 0 8px; } }
+/* "Organise with AI": the plan-ready and done blocks enter once, on the stage change (app.js agentHtml); a few times a day */
+.ag-enter, .ag-enter .ag-ch { transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out); }
+@starting-style { .ag-enter, .ag-enter .ag-ch { opacity: 0; transform: translateY(4px); } }
+.ag-enter .ag-ch:nth-child(1 of .ag-ch) { transition-delay: 30ms; }
+.ag-enter .ag-ch:nth-child(2 of .ag-ch) { transition-delay: 60ms; }
+.ag-enter .ag-ch:nth-child(3 of .ag-ch) { transition-delay: 90ms; }
+.ag-enter .ag-ch:nth-child(4 of .ag-ch) { transition-delay: 120ms; }
+.ag-enter .ag-ch:nth-child(5 of .ag-ch) { transition-delay: 150ms; }
+.ag-enter .ag-ch:nth-child(6 of .ag-ch) { transition-delay: 180ms; }
+.ag-enter .ag-ch:nth-child(7 of .ag-ch) { transition-delay: 210ms; }
+.ag-enter .ag-ch:nth-child(n+8 of .ag-ch) { transition-delay: 240ms; }   /* cap: 8 steps, 240ms */
 @media (prefers-reduced-motion: reduce) {
   .menu, .modal, .cn { transition: opacity 150ms ease; }
   .toast { transition: opacity 200ms ease; }
   button:active:not(:disabled), .brand:active { transform: none; }   /* press feedback without movement */
   .ai-caret { animation: none; }
+  .ag-enter, .ag-enter .ag-ch:nth-child(n of .ag-ch) { transition: opacity 150ms ease; transition-delay: 0ms; }   /* same specificity as the stagger rules, so the delays go too */
+  @starting-style { .ag-enter, .ag-enter .ag-ch { transform: none; } }
   @starting-style { .menu:not([hidden]), .modal-back:not([hidden]) .modal, .cn-back:not([hidden]) .cn { transform: none; } .toast:not([hidden]) { translate: none; } }
 }
 .mention .t { overflow-wrap: anywhere; }

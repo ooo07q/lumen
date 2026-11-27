@@ -1967,22 +1967,31 @@ function planHtml(plan) {
   if (plan.notes) h += T('<h4>其他說明</h4><p class="muted">') + esc(plan.notes) + "</p>";
   return h + "</div>";
 }
+const AG_SEEN = new Map();   // turn id → status last rendered; a new stage (plan ready, done) enters once
+const AG_ENTER = new Map();  // turn id → time the entrance started: renders in the same moment (pollAgent renders twice) keep it
 function agentHtml(t) {
   const name = { ingest: T("整理筆記"), analysis: T("存進知識庫"), lint: T("檢查知識庫") }[t.task] || T("工作");
   let h = '<div class="ai-turn ag"><div class="ai-q">✦ ' + esc(TS(t.label) || name) + "</div>";
+  const prev = AG_SEEN.get(t.id); AG_SEEN.set(t.id, t.status);
+  if (prev !== undefined && prev !== t.status && (t.status === "waiting" || t.status === "done")) AG_ENTER.set(t.id, performance.now());
+  const enter = performance.now() - (AG_ENTER.get(t.id) || -1e9) < 32;   // within one frame of the stage change; later re-renders don't replay it
+  const open = () => '<div class="ag-stage' + (enter ? " ag-enter" : "") + '">';
   if (t.model) h += '<div class="ai-ctxline">' + esc(cap(t.model)) + T("，") + esc(EFFORT_NAME[t.effort] || t.effort) + (t.jev ? T(" · Jev 開") : T(" · Jev 關")) + "</div>";
   h += '<div class="ai-a">';
   if (t.status === "starting") h += T('<div class="muted"><span class="spin"></span> 準備…</div>');
   if (t.status === "planning") h += T('<div class="muted"><span class="spin"></span> AI 正在讀這篇，規劃怎麼整理…</div>');
   h += stepsHtml(t, "plan");
+  let s1 = h.length;
   if (t.message) h += md(t.message);
   if (t.plan !== undefined && t.status !== "planning" && t.status !== "starting" && t.task && (t.message || t.plan)) h += planHtml(t.plan);
   if (t.status === "waiting") h += T('<p class="note-line">上面是 AI 打算怎麼做，還沒動手。想改的話寫在下面，不寫也可以。</p><textarea class="ag-note" rows="2" placeholder="例如：不要新增 X 頁；整篇都讀"></textarea>') +
     '<div class="ai-acts"><button class="primary" data-ag-go="' + esc(t.id) + T('">開始整理</button><button data-ag-cancel="') + esc(t.id) + T('">取消</button></div>') +
     T('<p class="muted small">AI 只會改知識庫裡的頁，不會動你的筆記。做完會列出改了哪些頁，不滿意可以全部還原。</p>');
+  if (t.status === "waiting") h = h.slice(0, s1) + open() + h.slice(s1) + "</div>";
   if (t.status === "acting") h += T('<div class="muted"><span class="spin"></span> AI 正在寫摘要、補進相關的頁…</div>');
   h += stepsHtml(t, "act");
   if (t.status === "acting" && t.live) h += '<div class="muted small">' + esc(t.live.slice(-200)) + "</div>";
+  let s2 = h.length;
   if (t.status === "done" || ((t.status === "stopped" || t.status === "error") && (t.changes || []).length)) {
     if (t.report && t.status === "done") h += md(t.report);
     const ch = t.changes || [];
@@ -1996,6 +2005,7 @@ function agentHtml(t) {
     h += T('<p class="muted small">這篇很長，一次整理一部分（第 ') + (t.part.i + 1) + T(" 部分，共 ") + t.part.n + T("），每部分的重點抓得比整篇一次完整。</p>") +
       '<div class="ai-acts"><button class="primary" data-ag-next="' + esc(t.part.path) + '" data-ag-part="' + t.part.next.i + T('">整理下一部分：') + esc(t.part.next.name) + "</button></div>";
   else if (t.status === "done" && t.part && !t.part.next) h += T('<p class="muted small">這篇的 ') + t.part.n + T(" 個部分都整理過了。</p>");
+  if (t.status === "done") h = h.slice(0, s2) + open() + h.slice(s2) + "</div>";
   if (t.status === "error") h += T('<div class="banner">沒有完成：') + esc(TS(t.error || "")) + (/log ?in|login|auth|登入/i.test(t.error || "") ? T("。在終端機打 <code>claude</code> 登入後再試。") : "") + "</div>";
   if (t.status === "stopped") h += T('<div class="ai-meta">已停止。') + ((t.changes || []).length ? "" : "") + "</div>";
   if (t.status === "cancelled") h += T('<div class="ai-meta">沒有執行。</div>');
