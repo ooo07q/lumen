@@ -618,10 +618,15 @@ $("#tabbar").addEventListener("drop", e => {
 });
 $("#tabbar").addEventListener("dragend", () => { dragTab = null; renderTabbar(); });
 
+// the right column keeps what it shows while the next one loads; a spinner only if it takes over 400ms
+let panelWait = 0;
+function panelSpin(html) { const n = ++panelWait; setTimeout(() => { if (panelWait === n) $("#panel").innerHTML = html; }, 400); }
+const SCROLL_AT = new Map();   // "kind:path" → where you were, so a note opened again comes back to the same place
 function stash() {
   const t = tab();
   if (!t) return;
   t.scroll = $(".center").scrollTop;
+  if (t.path) SCROLL_AT.set(t.kind + ":" + t.path, t.scroll);
   const ed = $("#editor");
   if (t.editing && ed) t.editText = Wys.value(ed);
   if (t.dirty && !t.external) saveTab(t, true);    // leaving the tab: save it (the text is taken now)
@@ -772,14 +777,19 @@ function bodyHtml(n, full) {
 function renderView() {
   const v = $("#view"), t = tab();
   v.dataset.tab = t ? String(t.id) : "";
+  clearTimeout(renderView.spin);
   if (!t) {
+    v.dataset.shown = ""; panelWait++;
     v.innerHTML = T('<div class="empty"><h2>從左邊打開一篇筆記</h2><p class="muted">⌘／Ctrl＋點擊在新分頁打開。</p></div>');
     $("#panel").innerHTML = T('<div class="panel-empty muted">打開筆記後，這裡會出現連結和建議。</div>');
     return;
   }
-  if (t.kind === "compare") return renderCompare(v, t);
-  if (t.kind === "file") return renderFile(v, t);
-  if (t.loading) { v.innerHTML = '<p class="muted pad"><span class="spin"></span></p>'; return; }
+  if (t.kind === "compare" || t.kind === "file") { v.dataset.shown = ""; return t.kind === "compare" ? renderCompare(v, t) : renderFile(v, t); }
+  if (t.loading) {   // keep the last note on screen while this one loads; a spinner only if it takes over 400ms
+    renderView.spin = setTimeout(() => { if (tab() === t && t.loading) { v.innerHTML = '<p class="muted pad"><span class="spin"></span></p>'; v.dataset.shown = ""; } }, 400);
+    return;
+  }
+  const shown = t.kind + ":" + t.path, isNew = v.dataset.shown !== shown;
   if (t.error) { v.innerHTML = '<p class="muted pad">' + esc(t.error) + "</p>"; return; }
   const n = t.note;
   let tools = "";
@@ -795,7 +805,9 @@ function renderView() {
     ed._open = name => { const rel = resolveLink(name) || attachmentRel(name); if (rel) openNote(rel, { newTab: true }); };
     ed.before(Wys.bar(ed, pickAttachments));
   }
-  $(".center").scrollTop = t.scroll || 0;
+  $(".center").scrollTop = t.scroll ?? SCROLL_AT.get(shown) ?? 0;
+  v.dataset.shown = shown;
+  if (isNew) v.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });   // a different note fades in; opacity only, so Reduce Motion keeps it; never blocks clicks or typing
   if (t.renameNow) { t.renameNow = false; startTitleRename(t); }
   updateAICtx();
 }
@@ -1106,13 +1118,13 @@ async function loadPanel(force) {
   if (!t) return;
   if (t.kind === "compare") { renderComparePanel(t); return; }
   if (t.kind === "file") { renderFilePanel(t); return; }
-  if (!t.note) { el.innerHTML = '<p class="muted"><span class="spin"></span></p>'; return; }
+  if (!t.note) { panelSpin('<p class="muted"><span class="spin"></span></p>'); return; }
   const path = t.path;
   if (!force && S.panelFor === path && panelData) return renderPanel(panelData);
-  el.innerHTML = T('<p class="muted"><span class="spin"></span> 找連結…</p>');
+  panelSpin(T('<p class="muted"><span class="spin"></span> 找連結…</p>'));
   let p;
   try { p = await api("/api/panel?path=" + encodeURIComponent(path)); }
-  catch (e) { el.innerHTML = '<p class="muted">' + esc(e.message) + "</p>"; return; }
+  catch (e) { panelWait++; el.innerHTML = '<p class="muted">' + esc(e.message) + "</p>"; return; }
   if (!tab() || tab().path !== path) return;
   S.panelFor = path; panelData = p;
   renderPanel(p);
@@ -1121,8 +1133,9 @@ async function loadPanel(force) {
 
 async function renderFilePanel(t) {
   const el = $("#panel");
-  el.innerHTML = '<p class="muted"><span class="spin"></span></p>';
-  try { await loadAssets(true); } catch (e) { el.innerHTML = '<p class="muted">' + esc(e.message) + "</p>"; return; }
+  panelSpin('<p class="muted"><span class="spin"></span></p>');
+  try { await loadAssets(true); } catch (e) { panelWait++; el.innerHTML = '<p class="muted">' + esc(e.message) + "</p>"; return; }
+  if (tab() === t) panelWait++;
   if (tab() !== t) return;
   const f = assetsData.files.find(x => x.path === t.path);
   const used = f ? f.used_by : [];
@@ -1134,6 +1147,7 @@ async function renderFilePanel(t) {
 }
 
 function renderComparePanel(t) {
+  panelWait++;
   const s = t.s;
   $("#panel").innerHTML = T("<h3>正在比較</h3>") + suggestionCard(s).replace('<button data-compare="' + esc(s.key) + T('">並排比較</button>'), "") +
     T('<div class="note-line">看完兩邊：如果真的衝突，請 AI 在 <a data-path="') + esc(s.topic.path) + '">' + esc(s.topic.title) +
@@ -1141,6 +1155,7 @@ function renderComparePanel(t) {
 }
 
 function renderPanel(p) {
+  panelWait++;
   const el = $("#panel"), isRaw = mine(p.path);
   let html = "";
   const sec = n => { html += (html ? "</div>" : "") + '<div class="psec" data-sec="' + n + '">'; };
@@ -1436,7 +1451,38 @@ const isNarrow = () => innerWidth < NARROW;
 function rightHidden() { return L.rightOff || (isNarrow() && !L.peek); }
 let wasNarrow = isNarrow();
 addEventListener("resize", () => { const n = isNarrow(); if (n !== wasNarrow) { wasNarrow = n; L.peek = false; applyLayout(); } });
+// the line you are reading stays put when a column opens, closes or is dragged
+let readAnchor = null;   // reused while you haven't scrolled, so closing and reopening a column comes back exactly
+function grabReadLine() {
+  const c = $(".center"), note = $("#note") || $("#editor");
+  if (!c || !note || c.scrollTop < 1 || !document.caretRangeFromPoint) return null;
+  if (readAnchor && Math.abs(c.scrollTop - readAnchor.scroll) < 1 && readAnchor.node.isConnected) return readAnchor;
+  const bar = $("#tabbar"), top = Math.max(c.getBoundingClientRect().top, bar ? bar.getBoundingClientRect().bottom : 0), x = note.getBoundingClientRect().left + 8;
+  for (const dy of [24, 36, 52, 76]) {     // the first line you can read, just under the tab bar
+    const rg = document.caretRangeFromPoint(x, top + dy);
+    if (!rg || !note.contains(rg.startContainer)) continue;
+    const n = rg.startContainer;
+    if (n.nodeType === 3 && n.length) {
+      const r = document.createRange(), o = Math.min(rg.startOffset, n.length - 1);
+      r.setStart(n, o); r.setEnd(n, o + 1);
+      const b = r.getBoundingClientRect();
+      if (b.height) return { box: r, node: n, y: b.top };   // keep the node: a range moves elsewhere when the note re-renders
+    } else {
+      const el = n.nodeType === 1 ? n : n.parentElement;
+      if (el && el !== note) return { box: el, node: el, y: el.getBoundingClientRect().top };
+    }
+  }
+  return null;
+}
+function holdReadLine(a) {
+  if (!a) return;
+  const c = $(".center");
+  c.scrollTop += a.box.getBoundingClientRect().top - a.y;
+  readAnchor = Object.assign(a, { scroll: c.scrollTop });
+}
+let slideGen = 0;
 function applyLayout() {
+  const anchor = slideGen ? null : grabReadLine();     // while a column slides, the slide holds the line itself
   const c = $("#cols");
   // set on the grid itself, not through an inherited variable: a variable makes every row in the tree recompute its style on each drag frame
   c.style.gridTemplateColumns = (L.leftOff ? 0 : L.left) + "px 5px minmax(0, 1fr) 5px " + (rightHidden() ? 0 : L.right) + "px";
@@ -1444,6 +1490,7 @@ function applyLayout() {
   const cmpA = (L.cmp * 100).toFixed(1) + "%";
   if (cmpA !== applyLayout.cmpA) { applyLayout.cmpA = cmpA; document.documentElement.style.setProperty("--cmp-a", cmpA); }   // only when the compare split moves
   if (typeof syncToggles === "function") syncToggles();
+  holdReadLine(anchor);
 }
 function saveLayout() {
   store.set("w-left", L.left); store.set("w-right", L.right); store.set("off-left", L.leftOff); store.set("off-right", L.rightOff); store.set("w-cmp", L.cmp);
@@ -1475,8 +1522,29 @@ $("#view").addEventListener("pointerdown", e => {
 });
 $("#view").addEventListener("dblclick", e => { if (e.target.closest(".cmp-g")) { L.cmp = 0.5; applyLayout(); saveLayout(); } });
 function toggleSide(side) {
-  if (side === "right" && isNarrow()) { if (L.rightOff) L.rightOff = false; L.peek = rightHidden(); applyLayout(); saveLayout(); return; }
-  L[side + "Off"] = !L[side + "Off"]; applyLayout(); saveLayout();
+  const slide = !matchMedia("(prefers-reduced-motion: reduce)").matches && innerWidth > 760;
+  const cols = $("#cols"), off = () => (side === "left" ? L.leftOff : rightHidden()), closing = !off();
+  const anchor = slide ? grabReadLine() : null, gen = slide ? ++slideGen : 0;   // no slide: applyLayout holds the line itself
+  if (slide) { cols.style.transition = "grid-template-columns 180ms cubic-bezier(0.23, 1, 0.32, 1)"; document.body.classList.add("sliding"); }   // the user chose this over instant (prototype, 2026-11-28)
+  if (side === "right" && isNarrow()) { if (L.rightOff) L.rightOff = false; L.peek = rightHidden(); }
+  else L[side + "Off"] = !L[side + "Off"];
+  applyLayout(); saveLayout();
+  if (!slide) return;
+  if (closing) cols.classList.remove(side + "-off");      // stay visible while it slides shut
+  const end = performance.now() + 190;
+  const finish = () => {
+    if (gen !== slideGen) return;                          // a newer toggle took over (CSS retargets from where it is), or already done
+    cols.style.transition = ""; document.body.classList.remove("sliding");
+    cols.classList.toggle(side + "-off", off());
+    slideGen = 0; holdReadLine(anchor);
+  };
+  const step = () => {
+    if (gen !== slideGen) return;
+    holdReadLine(anchor);
+    if (performance.now() < end) requestAnimationFrame(step); else finish();
+  };
+  requestAnimationFrame(step);
+  setTimeout(finish, 260);                                 // frames pause in a hidden window; the slide still ends
 }
 $("#toggle-left").onclick = () => toggleSide("left");
 $("#toggle-right").onclick = () => toggleSide("right");
