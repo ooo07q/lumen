@@ -665,3 +665,16 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
   @starting-style { .menu:not([hidden]), .modal-back:not([hidden]) .modal, .cn-back:not([hidden]) .cn { transform: none; } .toast:not([hidden]) { translate: none; } }
 }
 .mention .t { overflow-wrap: anywhere; }
+
+/* ---- scroll bars: no white track; a thin thumb in the theme's own grey, a little stronger
+   when the pointer is over that area. One rule for every scrolling area, light and dark. ---- */
+::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 28%, transparent);
+  background-clip: padding-box; border: 3px solid transparent; border-radius: 999px; min-height: 32px;
+}
+@media (hover: hover) and (pointer: fine) {
+  :hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 45%, transparent); }
+  ::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, var(--muted) 70%, transparent); }
+}

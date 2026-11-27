@@ -235,6 +235,7 @@ function renderTree() {
   vChunks = [];
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === S.sideTab));
   $("#filter").placeholder = { journal: T("篩選日期"), raw: T("篩選筆記"), assets: T("篩選附件"), wiki: T("篩選頁名"), results: T("篩選") }[S.sideTab];
+  if (!S.tree) { $("#sub").innerHTML = ""; el.innerHTML = '<p class="muted pad"><span class="spin"></span></p>'; return; }   // list not loaded yet: refreshTree draws it
   renderSub();
   if (S.sideTab === "journal") renderJournal(el, filter);
   else if (S.sideTab === "raw" && S.rawMode === "todo") renderQueue(el, filter);
