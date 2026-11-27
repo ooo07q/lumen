@@ -537,6 +537,20 @@ function showMenu(x, y, items, from, instant) {    // from: the trigger point it
 document.addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("#menu").hidden = true; });
 document.addEventListener("click", e => { const b = e.target.closest("[data-more]"); if (b) { b.nextElementSibling.hidden = false; b.remove(); } });
 document.addEventListener("scroll", () => ($("#menu").hidden = true), true);
+// press feedback for taps: with tap-to-click, :active lasts ~0ms, so a pointer press also gets .pressed, kept at least PRESS_MS (never for the keyboard)
+const PRESS_MS = 120;
+let pressEl = null, pressAt = 0, pressTimer = 0;
+function pressEnd() { clearTimeout(pressTimer); if (pressEl) pressEl.classList.remove("pressed"); pressEl = null; }
+document.addEventListener("pointerdown", e => {
+  pressEnd();
+  if (e.button !== 0 || e.ctrlKey) return;                       // left button only: ctrl-click is a right-click on a Mac
+  const b = e.target.closest && e.target.closest("button, [role=button]");
+  if (!b || b.disabled || b.getAttribute("aria-disabled") === "true") return;
+  pressEl = b; pressAt = performance.now(); b.classList.add("pressed");
+}, true);
+function pressUp() { if (pressEl) { clearTimeout(pressTimer); pressTimer = setTimeout(pressEnd, Math.max(0, PRESS_MS - (performance.now() - pressAt))); } }
+document.addEventListener("pointerup", pressUp, true);
+document.addEventListener("pointercancel", pressUp, true);       // a drag or scroll that takes over the pointer ends the press too
 tree.addEventListener("contextmenu", e => {
   const f = e.target.closest(".row[data-folder]");
   if (f && !S.tree.read_only) {
