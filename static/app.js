@@ -234,6 +234,7 @@ function renderTree() {
   const el = $("#tree"), filter = $("#filter").value.trim().toLowerCase();
   vChunks = [];
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === S.sideTab));
+  railSync();
   $("#filter").placeholder = { journal: T("篩選日期"), raw: T("篩選筆記"), assets: T("篩選附件"), wiki: T("篩選頁名"), results: T("篩選") }[S.sideTab];
   if (!S.tree) { $("#sub").innerHTML = ""; el.innerHTML = '<p class="muted pad"><span class="spin"></span></p>'; return; }   // list not loaded yet: refreshTree draws it
   renderSub();
@@ -1563,13 +1564,13 @@ function toggleSide(side) {
 }
 $("#toggle-left").onclick = () => toggleSide("left");
 $("#toggle-right").onclick = () => toggleSide("right");
-$("#view-btn").onclick = () => showViewSettings();
 document.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && (e.key === "\\" || e.code === "Backslash")) { e.preventDefault(); toggleSide(e.shiftKey ? "right" : "left"); }
 });
 function syncToggles() {
   $("#toggle-left").classList.toggle("on", !L.leftOff); $("#toggle-right").classList.toggle("on", !rightHidden());
   $("#toggle-left").setAttribute("aria-pressed", String(!L.leftOff)); $("#toggle-right").setAttribute("aria-pressed", String(!rightHidden()));
+  railSync();
 };
 applyLayout();
 
@@ -1841,7 +1842,7 @@ $("#brand").addEventListener("click", async e => {
   try { v = await api("/api/vaults"); } catch (err) { return; }
   const r = $("#brand").getBoundingClientRect();
   // only what matters now: this vault and the last few others (same-named ones show their folder), one row for
-  // the rest; the languages behind one row
+  // the rest. Display, language, Jev and connecting AI live in Settings (the gear at the bottom of the rail).
   const recent = v.vaults.filter(x => x.exists && x.path !== v.current).slice(0, 3);
   const cur = v.vaults.find(x => x.path === v.current);
   const shown = (cur ? [cur] : []).concat(recent);
@@ -1850,14 +1851,8 @@ $("#brand").addEventListener("click", async e => {
   const items = shown.map(x => ({ label: (x.path === v.current ? "✓ " : T("　 ")) + x.name + (dup(x.name) ? "（" + where(x) + "）" : ""),
     fn: () => x.path !== v.current && switchVault("/api/vault/open", { path: x.path }) }));
   items.push({ label: T("　 ") + T("其他筆記庫…"), fn: () => showStart() }, null,
-    { label: T("✦ 連接 AI…"), fn: () => showConnect() },
-    { label: T("✦ 請 AI 檢查知識庫…"), fn: () => startAgent("lint", {}) },
-    { label: T("在 Finder 中顯示"), fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) }, null,
-    { label: T("顯示設定…"), fn: () => showViewSettings() },
-    { label: T("語言") + T("：") + LANGS[LANG] + " ›", fn: () => setTimeout(() => showMenu(r.left, r.bottom + 4, [
-      ...Object.entries(LANGS).map(([k, name]) => ({ label: (k === LANG && chosenLang() ? "✓ " : T("　 ")) + name, fn: () => k !== LANG && setLang(k) })),
-      null, { label: (chosenLang() ? T("　 ") : "✓ ") + T("跟隨系統"), fn: () => chosenLang() && setLang("") }]), 0) });
-  showMenu(r.left, r.bottom + 4, items);
+    { label: T("在 Finder 中顯示"), fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) });
+  showMenu(r.right + 6, r.top, items, [r.right, r.top + r.height / 2]);   // the vault sits in the rail: the menu opens beside it
 });
 
 // ============================================================ ask AI (Claude Code, answers only)
@@ -1946,6 +1941,7 @@ function showRight(name) {
   document.querySelectorAll(".rtabs button").forEach(b => b.classList.toggle("on", b.dataset.rtab === name));
   $("#panel").hidden = name !== "note"; $("#ai").hidden = name !== "ai";
   if (name === "ai") { if (!$("#ai").innerHTML) renderAI(); updateAICtx(); }
+  railSync();
 }
 document.querySelector(".rtabs").addEventListener("click", e => { const b = e.target.closest("[data-rtab]"); if (b) showRight(b.dataset.rtab); });
 
@@ -2160,7 +2156,7 @@ function renderAI() {
     '<div class="ai-conv" id="ai-conv">' + conv + "</div>" +
     '<div class="ai-composer"><div id="ai-at" class="ai-at" hidden></div><div id="ai-ctx" class="ai-ctx"></div>' +
     T('<textarea id="ai-input" rows="2" placeholder="接著問…（Enter 送出，Shift+Enter 換行，@ 加入檔案）"></textarea>') +
-    T('<div class="ai-send-row"><select id="ai-model" title="回答用的模型">') + aiModels().map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
+    T('<div class="ai-send-row"><select id="ai-model" title="回答用的模型">').replace('<div class="ai-send-row">', '<div class="ai-send-row"><button class="ai-opt" id="ai-opt" type="button"></button>') + aiModels().map(([v, l]) => '<option value="' + v + '"' + (v === aiModel() ? " selected" : "") + ">" + l + "</option>").join("") +
     "</select>" +
     T('<select id="ai-effort" title="AI 回答前要想多久。選「自動」時，照你在問題裡的要求；沒說的話，由 Jev 依問題難度決定。">') + AI_EFFORTS.map(([v, l]) => '<option value="' + v + '"' + (v === aiEffort() ? " selected" : "") + ">" + l + "</option>").join("") +
     T('</select><button class="primary" id="ai-send">送出</button></div><div id="ai-sends" class="muted"></div></div>');
@@ -2181,6 +2177,7 @@ function updateAICtx() {
     att.map(a => '<span class="chip ctx at">@' + esc(a.title) + ' <button data-at-off="' + esc(a.path) + T('" title="不要用這個檔案當背景">×</button></span>')).join("");
   $("#ai-sends").textContent = T("會送給 ") + (isGpt(aiModel()) ? "ChatGPT" : "Claude") + T("：問題、相關的頁") + (ctx && !ctx.private ? T("、背景筆記") : "") +
     (att.length ? T("、@ 的檔案") : "") + T("、這段對話。日記不送。");
+  aiOptLabel();
 }
 
 $("#ai").addEventListener("click", e => {
@@ -2549,3 +2546,67 @@ async function connectClick(e) {
     store.set("connect-seen", true);
   } catch (e) {}
 })();
+
+// ============================================================ rail: the strip on the far left
+// One button per place (journal, notes, files, wiki), asking AI and settings; the vault sits on top. Each place's
+// own action (today's entry, a new note, checking the wiki) sits in the left column's header, not in a shared "+".
+// Clicking the place you're already in folds the left column, like most editors. (Chosen in the prototype, 2026-11-28.)
+function railSync() {
+  const rail = $("#rail");
+  if (!rail || !S.tree) return;
+  rail.querySelectorAll("[data-go]").forEach(b => {
+    const g = b.dataset.go, on = g === "ai" ? !rightHidden() && S.rtab === "ai" : !L.leftOff && S.sideTab === g;
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
+  });
+  $("#lhead-name").textContent = { journal: T("日記"), raw: T("筆記"), assets: T("附件"), wiki: T("知識庫"), results: T("搜尋") }[S.sideTab] || "";
+  const act = { journal: [T("＋ 今天"), T("打開今天的日記，沒有就照模板建立")], raw: [T("＋ 新筆記"), T("在筆記最上層新增一篇（右鍵點資料夾可以加在那裡）")],
+    wiki: [T("✦ 檢查"), T("請 AI 檢查知識庫：矛盾、斷掉的連結、缺的頁")] }[S.sideTab];
+  const b = $("#lhead-act");
+  b.hidden = !act || !!S.tree.read_only;
+  if (act) { b.textContent = act[0]; b.title = act[1]; }
+}
+$("#rail").addEventListener("click", e => {
+  const b = e.target.closest("[data-go]");
+  if (!b) return;
+  const go = b.dataset.go;
+  if (go === "ai") { if (!rightHidden() && S.rtab === "ai") toggleSide("right"); else showRight("ai"); return; }
+  if (!L.leftOff && S.sideTab === go) { toggleSide("left"); return; }
+  if (L.leftOff) toggleSide("left");
+  if (S.sideTab !== go) document.querySelector('.tabs button[data-tab="' + go + '"]').click();
+  railSync();
+});
+$("#lhead-act").onclick = () => {
+  if (S.sideTab === "journal") $("#journal-btn").click();
+  else if (S.sideTab === "raw") $("#new-btn").click();
+  else if (S.sideTab === "wiki") startAgent("lint", {});
+};
+// Settings: how it looks, the language, Jev, connecting AI. Nothing about files or vaults.
+$("#set-btn").onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect(), at = items => showMenu(r.right + 6, r.top, items, [r.right, r.top + r.height / 2]);
+  const lang = () => at(Object.entries(LANGS).map(([k, name]) => ({ label: (k === LANG && chosenLang() ? "✓ " : T("　 ")) + name, fn: () => k !== LANG && setLang(k) }))
+    .concat([null, { label: (chosenLang() ? T("　 ") : "✓ ") + T("跟隨系統"), fn: () => chosenLang() && setLang("") }]));
+  const items = [{ label: T("外觀…"), fn: () => showViewSettings() }, { label: T("語言") + T("：") + LANGS[LANG] + " ›", fn: () => setTimeout(lang, 0) }, null];
+  if (S.tree && S.tree.jev) items.push({ label: S.jevOn ? T("Jev：開，點一下關掉") : T("Jev：關，點一下打開"), fn: () => $("#jev-toggle").click() });
+  items.push({ label: T("連接 AI…"), fn: () => showConnect() });
+  at(items);
+};
+// The AI box's one options button: model and thinking, with what gets sent in its tooltip
+function aiOptLabel() {
+  const b = $("#ai-opt"), m = $("#ai-model"), ef = $("#ai-effort");
+  if (!b || !m || !ef) return;
+  const name = sel => (sel.options[sel.selectedIndex] || { textContent: "" }).textContent;
+  b.textContent = name(m).replace(/（.*?）|\(.*?\)/g, "").trim() + " · " + name(ef) + " ▾";
+  b.title = $("#ai-sends").textContent;
+}
+$("#ai").addEventListener("click", e => {
+  const b = e.target.closest("#ai-opt");
+  if (!b) return;
+  const m = $("#ai-model"), ef = $("#ai-effort"), r = b.getBoundingClientRect();
+  const pick = (sel, v) => { sel.value = v; sel.dispatchEvent(new Event("change", { bubbles: true })); aiOptLabel(); };
+  const opts = sel => [...sel.options].map(o => ({ label: (o.selected ? "✓ " : T("　 ")) + o.textContent, fn: () => pick(sel, o.value) }));
+  showMenu(r.left, r.top, opts(m).concat([null], opts(ef)), [r.left + r.width / 2, r.top]);
+  const menu = $("#menu");   // the box sits at the bottom of the window: open upward, growing out of the button
+  menu.style.top = Math.max(8, r.top - menu.offsetHeight - 4) + "px";
+  menu.style.transformOrigin = Math.round(r.left + r.width / 2 - menu.offsetLeft) + "px 100%";
+});
+railSync();

@@ -681,3 +681,46 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
   :hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 45%, transparent); }
   ::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, var(--muted) 70%, transparent); }
 }
+
+/* ---- rail: the strip on the far left (prototype pick "Rail 2", 2026-11-28) ----
+   It replaces the side tabs, the two "new" buttons, back/forward, the vault name, display settings and the
+   Jev switch in the top bar. Those elements stay in the page because other code still drives them. */
+.rail { position: fixed; z-index: 20; left: 0; top: 0; bottom: 0; width: 64px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0 12px; background: var(--panel); border-right: 1px solid var(--line); }
+.top, .cols { margin-left: 64px; }
+.rail > button, .rail .brand { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 54px; padding: 7px 0 6px; border: none; border-radius: 9px; background: none; color: var(--muted); font-size: 11px; font-weight: 400; }
+.rail > button.on { color: var(--text); background: var(--hover); }
+.rail > button.on svg { color: var(--accent); }
+.rail > button:is(:active, .pressed):not(:disabled) { transform: none; background-image: var(--press-layer); }
+@media (hover: hover) and (pointer: fine) { .rail > button:hover, .rail .brand:hover { color: var(--text); } }
+.rail .brand { cursor: pointer; min-width: 0; }
+.rail .brand #vault-name { max-width: 54px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail .brand .vault-where { font-size: 10px; max-width: 54px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail .brand .vault-where:empty { display: none; }
+.rail-line { width: 28px; height: 1px; background: var(--line); margin: 4px 0; flex: none; }
+.rail-gap { flex: 1; }
+.top .nav-btns, #jev-state, .left-actions, .left .tabs { display: none; }
+/* the top bar: column toggles at the ends, search in the middle */
+.top { display: grid; grid-template-columns: 1fr minmax(0, 640px) 1fr; }
+#toggle-left { justify-self: start; } #toggle-right { justify-self: end; }
+.search { max-width: none; }
+/* the left column's header: where you are, and that place's own action */
+.lhead { display: flex; align-items: center; gap: 8px; padding: 12px 10px 4px 14px; }
+.lhead b { font-size: 15px; flex: 1; min-width: 0; }
+#lhead-act { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 12px; padding: 4px 10px; white-space: nowrap; }
+#lhead-act[hidden] { display: none; }
+/* tabs over the note and over the right column: the same rounded pills as the rest, no coloured line */
+.tabbar { align-items: center; padding: 0 8px; gap: 4px; }
+.tab { border-radius: 8px; padding: 4px 6px 4px 12px; }
+.tab.on { box-shadow: 0 1px 2px rgba(0,0,0,.12); border: 1px solid var(--line); padding: 3px 5px 3px 11px; }
+.rtabs { padding: 8px 10px; gap: 4px; align-items: center; }
+.rtabs button { border: 1px solid transparent; border-radius: 8px; padding: 3px 11px; }
+.rtabs button.on { background: var(--bg); border-color: var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+/* the AI box: the text, one small options button, a round send arrow; what gets sent is the button's tooltip */
+#ai-model, #ai-effort, #ai-sends { display: none; }
+.ai-send-row { flex-wrap: nowrap; }
+.ai-opt { border: none; background: none; color: var(--muted); font-size: 12px; padding: 4px 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+@media (hover: hover) and (pointer: fine) { .ai-opt:hover { color: var(--text); background: var(--hover); } }
+#ai-send { width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 0; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+#ai-send::before { content: ""; width: 14px; height: 14px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 16V4M4.5 9.5 10 4l5.5 5.5' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 16V4M4.5 9.5 10 4l5.5 5.5' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat; }

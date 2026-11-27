@@ -1,6 +1,21 @@
 // Japanese for Lumen's interface, keyed by the Traditional Chinese text like i18n-en.js. A string missing here shows in
 // English. Drafted by Claude (Sonnet) from the Chinese and English, checked for markup; native speakers welcome to fix.
 const LUMEN_JA = {
+"AI 整理的知識庫": "AIがノートから整理したナレッジベース",
+"Jev：開，點一下關掉": "Jev：オン（クリックでオフ）",
+"Jev：關，點一下打開": "Jev：オフ（クリックでオン）",
+"✦ 檢查": "✦ チェック",
+"主要": "メイン",
+"和 AI 對話、請 AI 整理": "AIと話す・AIに整理を頼む",
+"問 AI": "AIに聞く",
+"外觀…": "外観…",
+"外觀、語言、Jev、連接 AI": "外観・言語・Jev・AI の接続",
+"日記和筆記用到的圖片、PDF": "日記とノートで使う画像・PDF",
+"設定": "設定",
+"請 AI 檢查知識庫：矛盾、斷掉的連結、缺的頁": "AIにナレッジベースをチェックしてもらう：矛盾、切れたリンク、足りないページ",
+"這篇筆記": "このノート",
+"連接 AI…": "AI を接続…",
+"＋ 今天": "＋ 今日",
 "找和目前背景最相關的…": "今の内容に合うものを探しています…",
 "Jev：和目前背景最相關": "Jev：今の内容にいちばん近いもの",
 "關鍵字：和目前背景相關": "キーワード：今の内容に関係するもの",

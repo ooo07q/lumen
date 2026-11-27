@@ -1,6 +1,21 @@
 // Korean for Lumen's interface, keyed by the Traditional Chinese text like i18n-en.js. A string missing here shows in
 // English. Drafted by Claude (Sonnet) from the Chinese and English, checked for markup; native speakers welcome to fix.
 const LUMEN_KO = {
+"AI 整理的知識庫": "AI가 노트로 정리한 지식 베이스",
+"Jev：開，點一下關掉": "Jev: 켜짐, 클릭하면 끔",
+"Jev：關，點一下打開": "Jev: 꺼짐, 클릭하면 켬",
+"✦ 檢查": "✦ 점검",
+"主要": "주요",
+"和 AI 對話、請 AI 整理": "AI와 대화, AI에게 정리 맡기기",
+"問 AI": "AI에게 묻기",
+"外觀…": "모양…",
+"外觀、語言、Jev、連接 AI": "모양, 언어, Jev, AI 연결",
+"日記和筆記用到的圖片、PDF": "일기와 노트에 쓰인 이미지, PDF",
+"設定": "설정",
+"請 AI 檢查知識庫：矛盾、斷掉的連結、缺的頁": "AI에게 지식 베이스 점검 맡기기: 모순, 끊긴 링크, 빠진 페이지",
+"這篇筆記": "이 노트",
+"連接 AI…": "AI 연결…",
+"＋ 今天": "+ 오늘",
 "找和目前背景最相關的…": "지금 상황에 가장 알맞은 걸 찾는 중…",
 "Jev：和目前背景最相關": "Jev: 지금 상황과 가장 관련 있음",
 "關鍵字：和目前背景相關": "키워드: 지금 상황과 관련 있음",
