@@ -1403,10 +1403,11 @@ let wasNarrow = isNarrow();
 addEventListener("resize", () => { const n = isNarrow(); if (n !== wasNarrow) { wasNarrow = n; L.peek = false; applyLayout(); } });
 function applyLayout() {
   const c = $("#cols");
-  c.style.setProperty("--lw", (L.leftOff ? 0 : L.left) + "px");
-  c.style.setProperty("--rw", (rightHidden() ? 0 : L.right) + "px");
+  // set on the grid itself, not through an inherited variable: a variable makes every row in the tree recompute its style on each drag frame
+  c.style.gridTemplateColumns = (L.leftOff ? 0 : L.left) + "px 5px minmax(0, 1fr) 5px " + (rightHidden() ? 0 : L.right) + "px";
   c.classList.toggle("left-off", L.leftOff); c.classList.toggle("right-off", rightHidden());
-  document.documentElement.style.setProperty("--cmp-a", (L.cmp * 100).toFixed(1) + "%");
+  const cmpA = (L.cmp * 100).toFixed(1) + "%";
+  if (cmpA !== applyLayout.cmpA) { applyLayout.cmpA = cmpA; document.documentElement.style.setProperty("--cmp-a", cmpA); }   // only when the compare split moves
   if (typeof syncToggles === "function") syncToggles();
 }
 function saveLayout() {

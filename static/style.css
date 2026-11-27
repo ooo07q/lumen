@@ -252,7 +252,7 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .tabbar:not([hidden]) ~ .view .cmp-head { top: 37px; }
 
 /* ---- v3: four sidebar sections, resizable columns, draggable tabs, attachments, quick search ---- */
-.cols { grid-template-columns: var(--lw, 280px) 5px minmax(0, 1fr) 5px var(--rw, 340px); }
+.cols { grid-template-columns: 280px 5px minmax(0, 1fr) 5px 340px; }   /* applyLayout sets the real widths */
 .left { border-right: none; min-width: 0; }
 .right { border-left: none; min-width: 0; }
 .cols.left-off .left, .cols.right-off .right { visibility: hidden; padding: 0; }
@@ -312,7 +312,9 @@ body.resizing iframe { pointer-events: none; }
 .jev-state { margin-left: 0; }
 #toggle-right { margin-left: auto; }
 #view-btn { margin-left: -6px; }
-.tree .row { position: relative; }
+.tree .row { position: relative; contain-intrinsic-size: auto 22px; }   /* 22px + 6px padding = the real 28px row */
+/* While a column line is dragged, rows out of view skip layout (a 1,400-row folder); not while scrolling, where laying out each row as it appears costs more */
+.resizing .tree .row { content-visibility: auto; }
 .tree .row-del { display: none; border: none; padding: 1px 3px; margin-left: auto; color: var(--muted); border-radius: 4px; line-height: 0; flex: none; }
 .tree .row:hover .row-del { display: inline-flex; }
 .tree .row:hover .count { display: none; }
