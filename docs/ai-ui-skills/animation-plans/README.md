@@ -4,7 +4,7 @@ Written by `improve-animations` (step 7 of [lumen-uiux-plan.md](../lumen-uiux-pl
 
 | # | Title | Severity | Status |
 |---|---|---|---|
-| 001 | [Respect Reduce Motion when scrolling to a highlighted name](001-highlight-scroll-reduced-motion.md) | MEDIUM | TODO |
+| 001 | [Respect Reduce Motion when scrolling to a highlighted name](001-highlight-scroll-reduced-motion.md) | MEDIUM | DONE |
 
 Order: 001 only. No dependencies.
 

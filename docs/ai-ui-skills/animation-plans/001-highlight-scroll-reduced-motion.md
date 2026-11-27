@@ -1,6 +1,6 @@
 # 001 — Respect Reduce Motion when scrolling to a highlighted name
 
-- **Status**: TODO
+- **Status**: DONE
 - **Commit**: 3aee96d
 - **Severity**: MEDIUM
 - **Category**: Accessibility

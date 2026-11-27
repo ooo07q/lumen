@@ -149,6 +149,36 @@ function rowFile(path, label, extra = "", pre = "") {
   return '<div class="row' + (on ? " active" : "") + '" data-path="' + esc(path) + '" title="' + esc(label) + '"' + (own ? ' draggable="true"' : "") + '><span class="caret">' + pre + '</span><span class="name">' + esc(label) + "</span>" + extra +
     (own ? '<button class="row-del" data-del="' + esc(path) + T('" title="刪除（移到垃圾桶，可復原）">') + TRASH_SVG + "</button>" : "") + "</div>";
 }
+// Long lists (a 1,200-chapter folder): rows are built in chunks of VCHUNK, and only chunks within VMARGIN px of
+// the view are in the page; the rest are empty boxes of the same height, so the scrollbar is right. Rows are 28px.
+const VCHUNK = 15, VMARGIN = 1000, VROW = 28;
+let vChunks = [];                                   // chunk html, by data-chunk; reset by each renderTree
+function rowsHtml(rows) {
+  if (rows.length <= VCHUNK * 2) return rows.join("");
+  let html = "";
+  for (let i = 0; i < rows.length; i += VCHUNK) {
+    const part = rows.slice(i, i + VCHUNK);
+    html += '<div class="vchunk" data-chunk="' + vChunks.length + '" style="height:' + part.length * VROW + 'px"></div>';
+    vChunks.push(part.join(""));
+  }
+  return html;
+}
+function vShow(c, on) {
+  if (on === !!c.dataset.on) return;
+  if (on) { c.innerHTML = vChunks[+c.dataset.chunk] || ""; c.style.height = ""; c.dataset.on = "1"; return; }
+  if (dragPath || c.contains(document.activeElement)) return;      // a row being dragged or focused stays
+  c.style.height = c.offsetHeight + "px"; c.innerHTML = ""; delete c.dataset.on;
+}
+const vIO = new IntersectionObserver(es => es.forEach(e => vShow(e.target, e.isIntersecting)), { root: $("#tree"), rootMargin: VMARGIN + "px 0px" });
+function vObserve() {                               // after the tree is rebuilt: fill what's in view now (no blank frame), then watch
+  const t = $("#tree"), cs = t.querySelectorAll(".vchunk");
+  vIO.disconnect();
+  if (!cs.length) return;
+  const top = t.getBoundingClientRect().top;
+  const near = [...cs].filter(c => { const r = c.getBoundingClientRect(); return r.bottom > top - VMARGIN && r.top < top + t.clientHeight + VMARGIN; });
+  near.forEach(c => vShow(c, true));
+  cs.forEach(c => vIO.observe(c));
+}
 // The one to-do marker, used everywhere a raw note is listed: orange = waiting to be organised,
 // grey = Jev found nothing to organise (empty or broken conversion).
 function ingestLabel(path) {
@@ -175,12 +205,13 @@ function renderRawNode(node, prefix, filter) {
       '</span><span class="count" title="' + (child.todo ? child.todo + T(" 篇待整理，共 ") : T("共 ")) + child.total + T(' 篇">') + (child.todo ? '<span class="new"></span>' + nf(child.todo) + " / " : "") + nf(child.total) + "</span></div>" +
       (open ? '<div class="kids">' + (inner || renderRawNode(child, key, "")) + "</div>" : "") + "</div>";
   }
+  const rows = [];
   for (const f of node.files) {
     const name = baseName(f.path);
     if (filter && !name.toLowerCase().includes(filter)) continue;
-    html += rowFile(f.path, name, dot(f));
+    rows.push(rowFile(f.path, name, dot(f)));
   }
-  return html;
+  return html + rowsHtml(rows);
 }
 
 function renderSub() {
@@ -201,6 +232,7 @@ function renderSub() {
 
 function renderTree() {
   const el = $("#tree"), filter = $("#filter").value.trim().toLowerCase();
+  vChunks = [];
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === S.sideTab));
   $("#filter").placeholder = { journal: T("篩選日期"), raw: T("篩選筆記"), assets: T("篩選附件"), wiki: T("篩選頁名"), results: T("篩選") }[S.sideTab];
   renderSub();
@@ -217,10 +249,11 @@ function renderTree() {
       const ps = S.tree.pages.filter(p => p.type === t && (!filter || p.title.toLowerCase().includes(filter)));
       if (!ps.length) continue;
       if (types.length > 1) html += '<div class="group sticky">' + TYPE_ZH[t] + " · " + ps.length + "</div>";
-      html += ps.map(p => rowFile(p.path, p.title)).join("");
+      html += rowsHtml(ps.map(p => rowFile(p.path, p.title)));
     }
     el.innerHTML = html || T('<div class="hint">沒有符合的頁面。</div>');
   } else if (S.sideTab === "results") renderResults(el);
+  vObserve();
 }
 
 // ---------- 日記
@@ -280,10 +313,10 @@ async function renderQueue(el, filter) {
     const open = S.queueOpen.has(u.unit);
     html += '<div class="folder"><div class="row" data-queue-folder="' + esc(u.unit) + '"><span class="caret">' + (open ? "▾" : "▸") + '</span><span class="name">' + esc(name) +
       '</span><span class="count">' + u.files + T(" 篇") + (pr ? " · " + pr : "") + "</span></div>";
-    if (open) html += '<div class="kids">' + S.tree.raw.filter(f => f.path.startsWith(u.unit + "/")).map(f => rowFile(f.path, f.path.slice(u.unit.length + 1).replace(/\.md$/, ""), dot(f))).join("") + "</div>";
+    if (open) html += '<div class="kids">' + rowsHtml(S.tree.raw.filter(f => f.path.startsWith(u.unit + "/")).map(f => rowFile(f.path, f.path.slice(u.unit.length + 1).replace(/\.md$/, ""), dot(f)))) + "</div>";
     html += "</div>";
   }
-  el.innerHTML = html;
+  el.innerHTML = html; vObserve();
 }
 
 // ---------- 附件
@@ -1006,6 +1039,7 @@ view.addEventListener("paste", e => {
 // ---------- highlight names in a note
 
 let hlIndex = -1;
+const scrollMotion = () => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");   // Reduce Motion: jump, don't glide
 function highlight(names, root, scroll = true) {
   root = root || $("#note");
   if (!root) return 0;
@@ -1031,14 +1065,14 @@ function highlight(names, root, scroll = true) {
     frag.append(tx.slice(last)); node.replaceWith(frag);
   }
   hlIndex = 0;
-  if (first && scroll) first.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (first && scroll) first.scrollIntoView({ behavior: scrollMotion(), block: "center" });
   return count;
 }
 function nextHighlight() {
   const marks = [...document.querySelectorAll("#view mark.hl")];
   if (!marks.length) return;
   hlIndex = (hlIndex + 1) % marks.length;
-  marks[hlIndex].scrollIntoView({ behavior: "smooth", block: "center" });
+  marks[hlIndex].scrollIntoView({ behavior: scrollMotion(), block: "center" });
 }
 
 // ============================================================ right panel
