@@ -2,7 +2,7 @@
 
 Emil Kowalski 的 AI UI skills 是一組給 coding agent（以 Claude Code 為主）用的指令包：讓 agent 做介面、動畫、手勢時照他的設計工程標準來，也幫忙審查、壓力測試和清理動畫。aiforui.dev 的首頁說：「The workflows are built around Claude Code, but the core of the course ... applies to any coding agent.」（<https://aiforui.dev/>）
 
-這份文件是 Lumen 介面大改前的研究，資料讀取日期 2026-11-26。2026-11-27 裝了第一批 4 個（emil-design-eng、review-animations、animation-vocabulary、ask-emil），在 `~/.claude/skills/`，詳見 [skills-catalog.md](skills-catalog.md) 的安裝狀態。
+這份文件是 Lumen 介面大改前的研究，資料讀取日期 2026-11-26。2026-11-27 裝了第一批 4 個（emil-design-eng、review-animations、animation-vocabulary、ask-emil）和第二批 8 個（animate、choreograph、apple-design、animation-performance、remove-animations、find-animation-opportunities、improve-animations、break-ui），共 12 個，在 `~/.claude/skills/`，詳見 [skills-catalog.md](skills-catalog.md) 的安裝狀態。
 
 | 文件 | 內容 |
 |---|---|

@@ -2117,21 +2117,34 @@ def short_path(path):
         return path
 
 
+def step_name(path):
+    """A file as the steps show it: its name, without folders or .md."""
+    return os.path.basename(str(path).rstrip("/")).removesuffix(".md") if path else ""
+
+
+# The agent's tools in plain words: %s is the file, page or search words
+TOOL_WORDS = {"search": "找 %s", "query": "找相關的頁", "outline": "看大綱 %s", "prep": "挑重點 %s", "skim": "略讀 %s",
+              "read": "讀 %s", "write": "寫 %s", "edit": "改 %s", "remove": "刪 %s", "cite": "補進相關的頁",
+              "log_append": "記錄這次整理", "log": "看整理紀錄", "check_source": "檢查有沒有漏 %s", "lint": "檢查格式"}
+
+
 def activity(block):
     name, inp = block.get("name", ""), block.get("input") or {}
     if name == "Read":
-        return "讀 " + short_path(inp.get("file_path", ""))
+        return "讀 " + step_name(short_path(inp.get("file_path", "")))
     if name in ("Glob", "Grep"):
         return "找 " + str(inp.get("pattern", ""))
     if name == "Edit":
-        return "改 " + short_path(inp.get("file_path", ""))
+        return "改 " + step_name(short_path(inp.get("file_path", "")))
     if name == "Write":
-        return "寫 " + short_path(inp.get("file_path", ""))
+        return "寫 " + step_name(short_path(inp.get("file_path", "")))
     if name.startswith("mcp__lumen__"):
         tool = name[len("mcp__lumen__"):]
         arg = (inp.get("file") or inp.get("path") or inp.get("query") or inp.get("question") or inp.get("title")
                or inp.get("source") or "")
-        return "%s %s" % (tool, short_path(str(arg)) if arg else "")
+        arg = str(arg) if tool in ("search", "query") else step_name(short_path(str(arg)))
+        w = TOOL_WORDS.get(tool)
+        return (w.replace("%s", arg).strip() if "%s" in w else w) if w else tool
     return name
 
 
@@ -2526,7 +2539,7 @@ def gpt_lean_phase(job, phase, message):
     job["text"] = ""
     if phase == "plan":
         job["conv"].append({"role": "user", "content": [{"type": "input_text", "text": message + "\n\n" + PLAN_JSON_TEXT}]})
-        job["steps"].append({"phase": "plan", "what": "ChatGPT 讀交給它的資料、列計畫", "ok": None})
+        job["steps"].append({"phase": "plan", "what": "ChatGPT 規劃怎麼整理", "ok": None})
         out = gpt_request(job, job["conv"], "medium", CHANGES_SCHEMA)
         job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": out}]})
         try:
@@ -2554,16 +2567,16 @@ def gpt_lean_phase(job, phase, message):
                 txt, err = t.call("read", {"path": rel, "lines": "1-600"})
                 if not err:
                     more.append("## `%s`\n\n%s" % (rel, txt))
-                    job["steps"].append({"phase": "act", "what": "讀 " + rel, "ok": True})
+                    job["steps"].append({"phase": "act", "what": "讀 " + step_name(rel), "ok": True})
         if asks_whole(plan, job):               # the user asked (when starting) for the note to be read whole
             more.insert(0, whole_note(job)); job["whole_given"] = True
-            job["steps"].append({"phase": "act", "what": "讀 " + job["path"] + "（整篇）", "ok": True})
+            job["steps"].append({"phase": "act", "what": "讀 " + step_name(job["path"]), "ok": True})
         msg = message + ("\n\n# More pages (the ones the plan names that you hadn't been given)\n\n" + "\n\n".join(more)
                          if more else "") + "\n\n" + CHANGES_TEXT
         job["conv"].append({"role": "user", "content": [{"type": "input_text", "text": msg}]})
         report = []
         for attempt in range(2):
-            job["steps"].append({"phase": "act", "what": "ChatGPT 寫出全部修改" if attempt == 0 else "ChatGPT 修正", "ok": None})
+            job["steps"].append({"phase": "act", "what": "ChatGPT 寫修改" if attempt == 0 else "ChatGPT 修正", "ok": None})
             out = gpt_request(job, job["conv"], "medium", CHANGES_SCHEMA)
             job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": out}]})
             try:
@@ -2576,10 +2589,10 @@ def gpt_lean_phase(job, phase, message):
                     not (ch.get("pages") or ch.get("edits") or str((ch.get("cite") or {}).get("blocks") or "").strip()):
                 # the user's note asked for the note whole: hand it over and ask for the changes again
                 job["whole_given"] = True
-                job["steps"].append({"phase": "act", "what": "讀 " + job["path"] + "（整篇）", "ok": True})
+                job["steps"].append({"phase": "act", "what": "讀 " + step_name(job["path"]), "ok": True})
                 job["conv"].append({"role": "user", "content": [{"type": "input_text", "text":
                     "The note, whole, as the user asked:\n\n" + whole_note(job) + "\n\n" + CHANGES_TEXT}]})
-                job["steps"].append({"phase": "act", "what": "ChatGPT 寫出全部修改", "ok": None})
+                job["steps"].append({"phase": "act", "what": "ChatGPT 寫修改", "ok": None})
                 out = gpt_request(job, job["conv"], "medium", CHANGES_SCHEMA)
                 job["conv"].append({"role": "assistant", "content": [{"type": "output_text", "text": out}]})
                 try:
@@ -2594,7 +2607,7 @@ def gpt_lean_phase(job, phase, message):
             pages = sorted(ch.get("pages") or [], key=lambda x: not str(x.get("path", "")).startswith("wiki/sources/"))
             for pg in pages:
                 r, err = t.call("write", {"path": pg.get("path"), "content": pg.get("content")})
-                job["steps"].append({"phase": "act", "what": "寫 " + str(pg.get("path")), "ok": not err})
+                job["steps"].append({"phase": "act", "what": "寫 " + step_name(pg.get("path")), "ok": not err})
                 if err:
                     problems.append("write %s: %s" % (pg.get("path"), r))
                 else:
@@ -2605,7 +2618,7 @@ def gpt_lean_phase(job, phase, message):
                         added.append("=== %s | (page)\n%s" % (os.path.basename(pg["path"])[:-3], pg.get("content") or ""))
             for ed in ch.get("edits") or []:
                 r, err = t.call("edit", {"path": ed.get("path"), "old": ed.get("old"), "new": ed.get("new")})
-                job["steps"].append({"phase": "act", "what": "改 " + str(ed.get("path")), "ok": not err})
+                job["steps"].append({"phase": "act", "what": "改 " + step_name(ed.get("path")), "ok": not err})
                 if err:
                     problems.append("edit %s: %s" % (ed.get("path"), r))
                 else:
@@ -2614,18 +2627,18 @@ def gpt_lean_phase(job, phase, message):
             if str(c.get("blocks") or "").strip():
                 added.append(str(c["blocks"]))
                 r, err = t.call("cite", {"blocks": c["blocks"], "source": c.get("source") or source or ""})
-                job["steps"].append({"phase": "act", "what": "cite " + str(c.get("source") or ""), "ok": not err})
+                job["steps"].append({"phase": "act", "what": "補進相關的頁", "ok": not err})
                 if err or "not found" in r.lower() or "no such" in r.lower():
                     problems.append("cite: " + r[-1500:])
             if attempt == 0 and str(ch.get("log") or "").strip():
                 r, err = t.call("log_append", {"entry": ch["log"]})
-                job["steps"].append({"phase": "act", "what": "log", "ok": not err})
+                job["steps"].append({"phase": "act", "what": "記錄這次整理", "ok": not err})
                 if err:
                     problems.append("log: " + r)
             # the app's checks: Jev's check of the source page, and lint
             if source and job["jev"] and attempt == 0:
                 r, err = t.call("check_source", {"title": source, "added": "\n".join(added)})
-                job["steps"].append({"phase": "act", "what": "check_source " + source, "ok": not err})
+                job["steps"].append({"phase": "act", "what": "檢查有沒有漏 " + step_name(source), "ok": not err})
                 found = check_findings(r) if not err else ""
                 if found:
                     problems.append("Jev's check of the source page, and of what you added to other pages (marked "
@@ -2636,7 +2649,7 @@ def gpt_lean_phase(job, phase, message):
                                     "if there is none, remove the claim (another part's page will cover it). It is "
                                     "a filter, not a verdict:\n" + found[-6000:])
             r, err = t.call("lint", {})
-            job["steps"].append({"phase": "act", "what": "lint", "ok": not err})
+            job["steps"].append({"phase": "act", "what": "檢查格式", "ok": not err})
             mine = [l for l in r.split("\n") if any(os.path.basename(x)[:-3] in l for x in touched) and
                     re.search(r"(?i)error|broken|invalid|duplicate|alias", l)]
             if mine:
@@ -2833,7 +2846,7 @@ def agent_plan(job):
         if handed and job["mode"] == "app":
             msg += "\n\n" + APP_HANDED_TEXT
         if handed:
-            job["steps"].append({"phase": "plan", "what": "準備資料：請 Jev 挑出重點段落、找出相關的頁", "ok": None})
+            job["steps"].append({"phase": "plan", "what": "Jev 挑重點、找相關的頁", "ok": None})
             try:
                 msg += "\n\n" + lean_context(job)
                 job["steps"][-1]["ok"] = True
@@ -2925,7 +2938,7 @@ def ingest_task(job):
 def choose_part(job):
     """Plan thread, before anything else: is the note organised a part at a time, and which part is this run?"""
     rel = job["path"]
-    job["steps"].append({"phase": "plan", "what": "判斷這篇要不要分部分整理、從哪裡分" + ("（Jev 依重點和段落的主題來分）" if job["jev"] else ""), "ok": None})
+    job["steps"].append({"phase": "plan", "what": "決定要不要分段整理", "ok": None})
     try:
         parts = note_parts(rel, job["jev"])
         job["steps"][-1]["ok"] = True
@@ -3079,7 +3092,9 @@ def api_agent_start(body):
         return 400, {"error": "不認得的工作"}
     # Claude works with the app's tools only; ChatGPT gets the material handed over (fewest requests: its plan
     # usage counts every request's whole input)
-    mode = body.get("mode") if body.get("mode") in ("agent", "app", "lean") else (
+    # "agent" (Claude Code's own Read/Glob/Grep) stays off: a Grep from the vault's top could walk into the journal,
+    # which the app's tools refuse outright
+    mode = body.get("mode") if body.get("mode") in ("app", "lean") else (
         "lean" if provider == "chatgpt" else "app")
     if provider == "chatgpt" and mode == "agent":
         mode = "lean"

@@ -10,7 +10,7 @@ const QUEUE_LABEL = { "ingest": T("建議整理"), "continue a work": T("接著�
 // Jev in plain words: the people using Lumen may never have heard of it, nor of probabilities
 const pct = p => Math.round(p * 100) + "%";
 const JEV_WHAT = T("Jev 是 Lumen 用來做小判斷的 AI。每次只問它一個固定的問題，例如「這篇值不值得整理」「這個詞指的是不是這一頁」，它回答「是」的機會有多大，用百分比表示。80% 以上，Lumen 照它的答案做；20% 以下，當作「不是」；中間的標成「待確認」，請你自己看一眼。它會出錯，所以只用來排順序、提醒你，最後由你決定。");
-const jevWhat = () => '<details class="what"><summary>' + T("Jev 是什麼？") + "</summary><p>" + JEV_WHAT + "</p></details>";
+const jevWhat = () => '<details class="what help"><summary>' + T("Jev 是什麼？") + "</summary><p>" + JEV_WHAT + "</p></details>";
 const REL_WORD = [T("和知識庫現有的主題都無關，整理它等於開一個新主題"), T("只順帶提到知識庫裡有的人或概念"),
   T("和知識庫裡的主題相同，能補上新的論點、例子或資料"), T("是知識庫好幾頁都在談的原著或重要研究")];
 const SUB_WORD = [T("幾乎沒有內容（封面、目錄、幾行字）"), T("短文或簡介"), T("完整的文章、章節或訪談")];
@@ -22,7 +22,7 @@ function triageExplain(t) {
       "<br>" + T("內容多少：") + esc(SUB_WORD[t.substance] || "") + T("（") + t.substance + T(" 分，最高 2）");
     if (t.decision === "continue a work") h += "<br>" + T("同一本書已經開始整理：再加 2 分");
   }
-  return '<div class="note-line">' + h + "</div>";
+  return '<div class="note-line help">' + h + "</div>";
 }
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -60,7 +60,7 @@ function toast(msg, action) {
 function dialog(title, html, ok = T("確定"), danger = false) {
   return new Promise(res => {
     $("#modal-title").textContent = title; $("#modal-body").innerHTML = html;
-    const okb = $("#modal-ok"); okb.textContent = ok; okb.classList.toggle("danger", danger);
+    const okb = $("#modal-ok"); okb.textContent = ok; okb.classList.toggle("danger", danger); $("#modal-cancel").hidden = false; $("#modal-body").onchange = null;
     $("#modal").hidden = false; okb.focus();
     const done = v => { $("#modal").hidden = true; document.removeEventListener("keydown", key, true); res(v); };
     const key = e => { if (e.key === "Escape") { e.preventDefault(); done(false); } else if (e.key === "Enter") { e.preventDefault(); done(true); } };
@@ -68,6 +68,39 @@ function dialog(title, html, ok = T("確定"), danger = false) {
     okb.onclick = () => done(true); $("#modal-cancel").onclick = () => done(false);
     $("#modal").onclick = e => { if (e.target.id === "modal") done(false); };
   });
+}
+
+// How Lumen looks, per browser: theme, text size, reading width, the help lines, the right column's sections.
+const VIEW_DEF = { theme: "auto", size: "m", width: "m", help: true, summaries: true, hide: [] };
+const VIEW = Object.assign({}, VIEW_DEF, store.get("view", {}));
+const PANEL_SECS = [["suggest", T("建議")], ["organized", T("整理狀況")], ["atts", T("這篇的附件")], ["links", T("潛在連結")],
+  ["linked", T("已連結")], ["backlinks", T("誰連到這頁")]];
+function applyView() {
+  const r = document.documentElement;
+  VIEW.theme === "auto" ? r.removeAttribute("data-theme") : r.setAttribute("data-theme", VIEW.theme);
+  r.dataset.size = VIEW.size; r.dataset.width = VIEW.width; r.dataset.hide = VIEW.hide.join(" ");
+  r.classList.toggle("no-help", !VIEW.help); r.classList.toggle("no-summaries", !VIEW.summaries);
+}
+applyView();
+function showViewSettings() {
+  const opt = (k, v, label) => '<label class="vopt"><input type="radio" name="' + k + '" value="' + v + '"' + (VIEW[k] === v ? " checked" : "") + "> " + label + "</label>";
+  const box = (k, label, on) => '<label class="vopt"><input type="checkbox" data-k="' + k + '"' + (on ? " checked" : "") + "> " + label + "</label>";
+  const html = '<div class="vset">' +
+    "<h4>" + T("外觀") + '</h4><div class="vrow">' + opt("theme", "auto", T("跟隨系統")) + opt("theme", "light", T("淺色")) + opt("theme", "dark", T("深色")) + "</div>" +
+    "<h4>" + T("內文字級") + '</h4><div class="vrow">' + opt("size", "s", T("小")) + opt("size", "m", T("中")) + opt("size", "l", T("大")) + "</div>" +
+    "<h4>" + T("內文寬度") + '</h4><div class="vrow">' + opt("width", "s", T("窄")) + opt("width", "m", T("中")) + opt("width", "l", T("寬")) + "</div>" +
+    "<h4>" + T("右欄顯示") + '</h4><div class="vrow wrap">' + PANEL_SECS.map(([k, l]) => box("sec:" + k, l, !VIEW.hide.includes(k))).join("") + box("summaries", T("頁面摘要"), VIEW.summaries) + "</div>" +
+    "<h4>" + T("說明文字") + '</h4><div class="vrow">' + box("help", T("顯示功能說明（熟悉之後可以關掉）"), VIEW.help) + "</div></div>";
+  dialog(T("顯示設定"), html, T("完成"));
+  $("#modal-cancel").hidden = true;
+  const body = $("#modal-body");
+  body.onchange = e => {
+    const i = e.target;
+    if (i.type === "radio") VIEW[i.name] = i.value;
+    else if (i.dataset.k.startsWith("sec:")) { const k = i.dataset.k.slice(4); VIEW.hide = VIEW.hide.filter(x => x !== k).concat(i.checked ? [] : [k]); }
+    else VIEW[i.dataset.k] = i.checked;
+    store.set("view", VIEW); applyView();
+  };
 }
 
 const jevUsable = () => S.tree && S.tree.jev && S.jevOn;
@@ -193,7 +226,7 @@ const WEEK = [T("日"), T("一"), T("二"), T("三"), T("四"), T("五"), T("六
 function renderJournal(el, filter) {
   const js = S.tree.raw.filter(f => inJournal(f.path)).map(f => ({ ...f, name: baseName(f.path) }))
     .filter(f => !filter || f.name.toLowerCase().includes(filter)).sort((a, b) => b.name.localeCompare(a.name));
-  let html = '<div class="hint">' + js.length + T(" 篇，在 <code>") + esc(S.tree.journal) + T("/</code>。日記只留在本機，不送 Jev。</div>");
+  let html = '<div class="hint help">' + js.length + T(" 篇日記，只留在這台電腦：不送給 Jev，也不會整理進知識庫。</div>");
   if (!js.length) html += T('<div class="hint">還沒有日記。按上面的「＋ 今天的日記」開始寫。</div>');
   let month = null;
   for (const f of js) {
@@ -671,12 +704,13 @@ function headHtml(n, t) {
       if (rel) chips.push(attLink(rel, T("原始 PDF")));
       chips.push(T('<button class="link-btn" data-act="pdf-layout" title="PDF 轉出來的筆記常有斷行、頁首頁尾和圖中文字。整理只影響顯示，檔案不變。">') + (S.pdfTidy ? T("顯示原始排版") : T("整理排版")) + "</button>");
     }
-    if (n.private) chips.push(T('<span class="chip todo">日記：不送 Jev</span>'));
+    if (n.private) chips.push(T('<span class="chip todo" title="日記只留在這台電腦：不送給 Jev，也不會整理進知識庫。">私人日記</span>'));
   }
   const fmm = n.text.match(/^---\n([\s\S]*?)\n---/);         // tags, from the note's properties
   const tags = fmm ? (Props.parse(fmm[1]).find(p => /^tags?$/.test(p.key || "") && p.kind === "list") || { items: [] }).items : [];
   if (tags.length) chips.push(tags.slice(0, 8).map(x => '<span class="tag">#' + esc(String(x).replace(/^#/, "")) + "</span>").join(" "));
-  chips.push('<span title="' + esc(n.path) + '">' + esc(n.path.split("/").slice(0, -1).join(" / ")) + "</span>");
+  const folder = n.path.split("/").slice(0, -1).filter((x, i) => !(i === 0 && x === "raw"));   // the notes folder goes unsaid
+  if (!n.private && folder.length) chips.push("<span>" + esc(folder.join(" / ")) + "</span>");
   return (renamable ? T('<h1 class="renamable" data-act="rename" title="點一下改名">') : "<h1>") + esc(title) + '</h1><div class="meta">' + chips.join("<span>·</span>") + "</div>" +
     (n.page && n.page.summary ? '<p class="summary">' + esc(n.page.summary) + "</p>" : "");
 }
@@ -704,9 +738,8 @@ function renderView() {
   if (t.error) { v.innerHTML = '<p class="muted pad">' + esc(t.error) + "</p>"; return; }
   const n = t.note;
   let tools = "";
-  if (n.editable) tools = '<div class="note-tools">' + T('<button data-act="history" class="ghost" title="這篇以前的版本，可以還原">版本</button>') +
-    T('<button data-act="delete" class="ghost" title="移到垃圾桶，可復原">') + TRASH_SVG + T(" 刪除</button>") + (t.editing ? T('<button data-act="preview" class="primary" title="離開編輯（修改會自動儲存）">完成</button><button data-act="revert" title="回到這次開始編輯前的內容">還原這次編輯</button>') :
-    T('<button data-act="edit">編輯</button>') + (t.dirty ? T('<button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>') : "")) + '<span class="muted save-msg">' + esc(t.msg || (t.editing ? T("修改會自動儲存 · 拖進或貼上檔案會存成附件") : "")) + "</span></div>";
+  if (n.editable) tools = '<div class="note-tools">' + (t.editing ? T('<button data-act="preview" class="primary" title="離開編輯（修改會自動儲存）">完成</button><button data-act="revert" title="回到這次開始編輯前的內容">還原這次編輯</button>') :
+    T('<button data-act="edit">編輯</button>') + (t.dirty ? T('<button data-act="save" class="primary">儲存</button><button data-act="revert">放棄修改</button>') : "")) + T('<button data-act="more" class="ghost more" title="更多：版本、刪除">⋯</button>') + '<span class="muted save-msg">' + esc(t.msg || (t.editing ? T("修改會自動儲存 · 拖進或貼上檔案會存成附件") : "")) + "</span></div>";
   if (t.external) tools += T('<div class="banner">這篇在別處被改過。<button data-act="reload">載入新版本</button>（你這裡的修改會不見）</div>');
   v.innerHTML = '<div class="note-head">' + headHtml(n, t) + "</div>" + tools +
     (t.editing ? '<div id="editor" class="editor wys" contenteditable="true" spellcheck="false"></div>' : '<article id="note" class="note">' + bodyHtml(n, t.full) + "</article>");
@@ -867,6 +900,10 @@ $("#view").addEventListener("click", e => {
   else if (act === "reload") reloadTab(t);
   else if (act === "next-hl") nextHighlight();
   else if (act === "delete") deleteFile(t.path);
+  else if (act === "more") {
+    const r = b.getBoundingClientRect();
+    showMenu(r.right - 180, r.bottom + 4, [{ label: T("以前的版本…"), fn: () => showHistory(t.path) }, { label: T("刪除（移到垃圾桶）"), fn: () => deleteFile(t.path) }]);
+  }
   else if (act === "history") showHistory(t.path);
   else if (act === "rename") startTitleRename(t);
   else if (act === "pdf-layout") { S.pdfTidy = !S.pdfTidy; store.set("pdf-tidy", S.pdfTidy); renderView(); }
@@ -999,7 +1036,7 @@ const W_LABEL = { 2: T("主題"), 1: T("有討論"), 0: T("順帶提到") };
 function mentionRow(m) {
   const no = m.refers != null && m.refers <= 0.2;
   const unsure = m.refers != null && m.refers > 0.2 && m.refers < 0.8;
-  const tag = m.refers == null ? "" : no ? T("可能不是") : unsure ? T("待確認 ") + pct(m.refers) : (m.weight != null ? W_LABEL[m.weight] : "Jev " + pct(m.refers));
+  const tag = m.refers == null ? "" : no ? T("可能不是") : unsure ? pct(m.refers) : "";   // the group's heading says the rest
   return '<div class="mention' + (no ? " no" : "") + '" data-path="' + esc(m.path) + '" data-names="' + esc(JSON.stringify([m.title, ...(m.aliases || []), ...m.matched])) +
     '"><span class="w' + (m.weight != null ? " w" + m.weight : "") + '"></span><span><span class="t">' + esc(m.title) + '</span> <span class="muted">' + esc(TYPE_ZH[m.type] || "") +
     '</span><span class="s">' + esc(m.summary) + '</span></span><span class="x">×' + m.n + (tag ? "<br>" + esc(tag) : "") + "</span></div>";
@@ -1059,13 +1096,17 @@ function renderComparePanel(t) {
 
 function renderPanel(p) {
   const el = $("#panel"), isRaw = mine(p.path);
-  let html = T('<h3>建議 <span class="n">') + (p.suggestions.length || "") + "</span></h3>";
-  html += p.suggestions.length ? p.suggestions.map(suggestionCard).join("") : T('<div class="note-line">沒有需要你看的事。</div>');
+  let html = "";
+  const sec = n => { html += (html ? "</div>" : "") + '<div class="psec" data-sec="' + n + '">'; };
+  sec("suggest");
+  if (p.suggestions.length || p.unsure || p.stale) html += T('<h3>建議 <span class="n">') + (p.suggestions.length || "") + "</span></h3>";   // nothing to see: no section
+  html += p.suggestions.map(suggestionCard).join("");
   if (p.unsure) html += T('<div class="note-line">另有 ') + p.unsure + T(" 組說法 Jev 沒把握是不是衝突，先不列出（這類大約六成其實不衝突）。下次請 AI 檢查知識庫時，它會讀過再決定。</div>");
   if (p.stale) html += '<div class="note-line">' + p.stale + T(" 對的判斷做完之後，相關頁面又改過，判斷可能過時，先不列。下次檢查知識庫時會重新判斷。</div>");
-  if (p.suggestions.length || p.unsure) html += T('<div class="note-line">這些判斷是檢查知識庫時存下來的，Jev 關掉也看得到。</div>');
+  if (p.suggestions.length || p.unsure) html += T('<div class="note-line help">這些判斷是檢查知識庫時存下來的，Jev 關掉也看得到。</div>');
   if (p.recorded && p.recorded.length) html += T("<h3>這頁記下的爭議</h3>") + p.recorded.map(recordedCard).join("");
 
+  sec("organized");
   if (isRaw) {
     if (p.organized) {
       html += T('<h3>已整理成</h3><div class="linklist"><a data-path="') + esc(p.organized.source.path) + '"><strong>' + esc(p.organized.source.title) + "</strong></a></div>";
@@ -1077,13 +1118,15 @@ function renderPanel(p) {
     }
   }
 
+  sec("atts");
   const atts = noteAttachments(tab() && tab().note ? tab().note.text : "");
   if (atts.length) html += T('<h3>這篇的附件 <span class="n">') + atts.length + '</span></h3><div class="linklist">' +
     atts.map(a => '<a data-path="' + esc(a) + '">' + fileKind(a)[1] + " " + esc(a.split("/").pop()) + "</a>").join("") + "</div>";
 
   const unlinked = p.mentions.filter(m => !m.linked), linked = p.mentions.filter(m => m.linked);
+  sec("links");
   html += T('<h3>潛在連結 <span class="n">') + (unlinked.length || "") + "</span></h3>" +
-    (unlinked.length ? T('<div class="note-line">這篇寫到了知識庫裡這些頁的名稱，但還沒連過去。</div>') : "");
+    (unlinked.length ? T('<div class="note-line help">這篇寫到了知識庫裡這些頁的名稱，但還沒連過去。</div>') : "");
   if (isRaw) {
     if (p.private) html += T('<div class="banner">日記不送 Jev，只看字面：出現頁面的名稱就列出來。</div>');
     else if (S.checking.has(p.path)) html += T('<div class="banner ok"><span class="spin"></span> Jev 正在判斷每個名稱是不是真的指那一頁…</div>');
@@ -1099,14 +1142,17 @@ function renderPanel(p) {
       const ms = unlinked.filter(f);
       if (ms.length) html += '<div class="sub">' + label + " · " + ms.length + "</div>" + ms.map(mentionRow).join("");
     }
-    html += T('<div class="note-line">「主題」「有討論」「順帶提到」：Jev 有八成以上的把握，這裡講的就是那一頁，再依這篇談它多少來分。「待確認」：Jev 沒把握，後面的百分比是它覺得「是」的機會，請你自己看一眼。</div>') + jevWhat();
+    html += T('<div class="note-line help">「主題」「有討論」「順帶提到」：Jev 有八成以上的把握，這裡講的就是那一頁，再依這篇談它多少來分。「待確認」：Jev 沒把握，後面的百分比是它覺得「是」的機會，請你自己看一眼。</div>') + jevWhat();
   } else html += unlinked.slice(0, 60).map(mentionRow).join("");
+  sec("linked");
   if (linked.length) html += T('<h3>已連結 <span class="n">') + linked.length + "</span></h3>" + linked.slice(0, 40).map(mentionRow).join("");
+  sec("backlinks");
   if (p.backlinks) html += T('<h3>誰連到這頁 <span class="n">') + p.backlinks.length + '</span></h3><div class="linklist">' +
     p.backlinks.slice(0, 80).map(c => '<a data-path="' + esc(c.path) + '">' + esc(c.title) + "</a>").join("") + (p.backlinks.length > 80 ? T('<div class="note-line">…還有 ') + (p.backlinks.length - 80) + T(" 頁</div>") : "") + "</div>";
-  html += T('<p class="note-line" style="margin-top:24px">點一列，會在筆記裡標出這個名稱出現的地方；點頁名打開那一頁（按住 ⌘／Ctrl 點，開在新分頁）。</p>');
+  html += T('<p class="note-line help" style="margin-top:24px">點一列，會在筆記裡標出這個名稱出現的地方；點頁名打開那一頁（按住 ⌘／Ctrl 點，開在新分頁）。</p>');
   const w = jevWhat(), wi = html.indexOf(w);                 // "what is Jev" once per panel
   if (wi >= 0) html = html.slice(0, wi + w.length) + html.slice(wi + w.length).split(w).join("");
+  html += "</div>";
   el.innerHTML = html;
   const c = $("#check-now");
   if (c) c.onclick = () => runCheck(p.path);
@@ -1377,6 +1423,7 @@ $("#view").addEventListener("dblclick", e => { if (e.target.closest(".cmp-g")) {
 function toggleSide(side) { L[side + "Off"] = !L[side + "Off"]; applyLayout(); saveLayout(); }
 $("#toggle-left").onclick = () => toggleSide("left");
 $("#toggle-right").onclick = () => toggleSide("right");
+$("#view-btn").onclick = () => showViewSettings();
 document.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && (e.key === "\\" || e.code === "Backslash")) { e.preventDefault(); toggleSide(e.shiftKey ? "right" : "left"); }
 });
@@ -1665,6 +1712,7 @@ $("#brand").addEventListener("click", async e => {
     { label: T("✦ 連接 AI…"), fn: () => showConnect() },
     { label: T("✦ 請 AI 檢查知識庫…"), fn: () => startAgent("lint", {}) },
     { label: T("在 Finder 中顯示"), fn: () => api("/api/reveal", {}).catch(err => toast(err.message)) }, null,
+    { label: T("顯示設定…"), fn: () => showViewSettings() },
     { label: T("語言") + T("：") + LANGS[LANG] + " ›", fn: () => setTimeout(() => showMenu(r.left, r.bottom + 4, [
       ...Object.entries(LANGS).map(([k, name]) => ({ label: (k === LANG && chosenLang() ? "✓ " : T("　 ")) + name, fn: () => k !== LANG && setLang(k) })),
       null, { label: (chosenLang() ? T("　 ") : "✓ ") + T("跟隨系統"), fn: () => chosenLang() && setLang("") }]), 0) });
@@ -1827,14 +1875,14 @@ function agentHtml(t) {
   if (t.model) h += '<div class="ai-ctxline">' + esc(cap(t.model)) + T("，") + esc(EFFORT_NAME[t.effort] || t.effort) + (t.jev ? T(" · Jev 開") : T(" · Jev 關")) + "</div>";
   h += '<div class="ai-a">';
   if (t.status === "starting") h += T('<div class="muted"><span class="spin"></span> 準備…</div>');
-  if (t.status === "planning") h += T('<div class="muted"><span class="spin"></span> AI 正在讀這篇、找知識庫裡相關的頁，想好要怎麼改（這一步不會改任何東西）…</div>');
+  if (t.status === "planning") h += T('<div class="muted"><span class="spin"></span> AI 正在讀這篇，規劃怎麼整理…</div>');
   h += stepsHtml(t, "plan");
   if (t.message) h += md(t.message);
   if (t.plan !== undefined && t.status !== "planning" && t.status !== "starting" && t.task && (t.message || t.plan)) h += planHtml(t.plan);
   if (t.status === "waiting") h += T('<p class="note-line">上面是 AI 打算怎麼做，還沒動手。想改的話寫在下面，不寫也可以。</p><textarea class="ag-note" rows="2" placeholder="例如：不要新增 X 頁；整篇都讀"></textarea>') +
     '<div class="ai-acts"><button class="primary" data-ag-go="' + esc(t.id) + T('">開始整理</button><button data-ag-cancel="') + esc(t.id) + T('">取消</button></div>') +
     T('<p class="muted small">AI 只會改知識庫裡的頁，不會動你的筆記。做完會列出改了哪些頁，不滿意可以全部還原。</p>');
-  if (t.status === "acting") h += T('<div class="muted"><span class="spin"></span> AI 正在寫：替這篇寫一頁摘要，再把新內容補進相關的頁…</div>');
+  if (t.status === "acting") h += T('<div class="muted"><span class="spin"></span> AI 正在寫摘要、補進相關的頁…</div>');
   h += stepsHtml(t, "act");
   if (t.status === "acting" && t.live) h += '<div class="muted small">' + esc(t.live.slice(-200)) + "</div>";
   if (t.status === "done" || ((t.status === "stopped" || t.status === "error") && (t.changes || []).length)) {
@@ -2119,7 +2167,7 @@ async function refreshConnect() {
   const html = [claudeCard(st.claude), chatgptCard(st.chatgpt), jevCard(st.jev)];
   const body = $("#cn-body");
   if (!body.querySelector(".cn-slot")) {
-    body.innerHTML = T('<p class="muted cn-lead">用你自己的訂閱或金鑰。Lumen 不經手你的帳號密碼，用量算在你自己的方案裡。Claude Code 和 ChatGPT 至少連一個。</p>') +
+    body.innerHTML = T('<p class="muted cn-lead">用你自己的帳號。Lumen 看不到你的密碼，用量算在你的方案裡。Claude 和 ChatGPT 至少連一個。</p>') +
       '<div class="cn-slot"></div><div class="cn-slot"></div><div class="cn-slot"></div>';
   }
   // only the cards that changed are redrawn: a poll while Claude installs never swallows a click elsewhere
@@ -2144,11 +2192,14 @@ async function refreshConnect() {
 // Every card follows one rule: 未連接 → 「連接」; 連接中… → 「取消」; 已連接 → 「中斷連接」 (and 「管理用量」 where the
 // service has a usage page). Each card: what it is for, what is in use now, the buttons, one line on what Lumen keeps.
 const CN_STATE = { off: T("未連接"), wait: T("連接中…"), on: T("已連接") };
+// Connected: the name, what is in use and the buttons; what it is for and the fine print only before connecting
+// (disconnecting asks first, and says what it does)
 function card(name, st, o) {
+  const on = st === "on";
   return '<section class="cn-card"><div class="cn-row"><h3>' + name + (o.sub ? '<span class="cn-sub">' + o.sub + "</span>" : "") + '</h3><span class="cn-state ' + st + '">' + CN_STATE[st] + "</span></div>" +
-    "<p>" + o.purpose + "</p>" + (o.detail ? '<div class="cn-detail">' + o.detail + "</div>" : "") +
+    (on ? "" : "<p>" + o.purpose + "</p>") + (o.detail ? '<div class="cn-detail">' + o.detail + "</div>" : "") +
     '<div class="cn-acts">' + o.acts + "</div>" + (o.err ? '<p class="cn-err">' + o.err + "</p>" : "") +
-    (o.note ? '<p class="muted small">' + o.note + "</p>" : "") + "</section>";
+    (o.note && !on ? '<p class="muted small">' + o.note + "</p>" : "") + "</section>";
 }
 const cnBtn = (cn, label, primary) => '<button class="' + (primary ? "primary" : "ghost") + '" data-cn="' + cn + '">' + label + "</button>";
 const cnLink = (href, label) => '<a href="' + href + '" target="_blank" rel="noopener">' + label + "</a>";
@@ -2157,7 +2208,7 @@ function claudeCard(c) {
   const job = c.job || {};
   const installing = job.kind === "install" && job.status === "running";
   const waiting = job.kind === "login" && job.status === "waiting" && !c.logged_in;
-  const o = { sub: T("Claude 訂閱（Pro、Max）登入"), purpose: T("用你的 Claude 訂閱回答問題、整理知識庫。") };
+  const o = { sub: T("需要 Claude Pro 或 Max 訂閱"), purpose: T("用你的 Claude 訂閱回答問題、整理知識庫。") };
   let st;
   if (c.connected) {
     st = "on";
@@ -2200,7 +2251,7 @@ function installProgress(p) {
 }
 
 function chatgptCard(g) {
-  const o = { purpose: T("用你的 ChatGPT 付費方案（Go、Plus、Pro）回答問題、整理知識庫。OpenAI 不開放免費版給其他 app 使用。") };
+  const o = { sub: T("需要 ChatGPT Go、Plus 或 Pro 方案"), purpose: T("用你的 ChatGPT 方案回答問題、整理知識庫。免費版不能用在其他 app。") };
   let st;
   if (g.connected) {
     st = "on";
@@ -2222,12 +2273,11 @@ function chatgptCard(g) {
 }
 
 function jevCard(j) {
-  const o = { purpose: T("Jev 是做小判斷的 AI。它幫 Lumen 找相關的頁、判斷問題難不難、挑出筆記的重點段落、檢查 AI 整理的結果有沒有漏掉或寫錯。不連也能用，搜尋會改成比對關鍵字。") };
+  const o = { sub: T("選用：需要 TypeSafe 金鑰"), purpose: T("Jev 幫 Lumen 做小判斷：找相關的頁、挑出筆記的重點、檢查 AI 整理得對不對。不連也能用，搜尋會改成比對關鍵字。") };
   let st;
   if (j.connected) {
     st = "on";
-    const where = { app: T("存在 Lumen"), env: T("環境變數 TYPESAFE_API_KEY"), shared: "~/.config/typesafe" }[j.source];
-    o.detail = T("目前使用：你的 TypeSafe 金鑰（") + where + T("）。");
+    o.detail = T("目前使用：你的 TypeSafe 金鑰。");
     o.acts = cnBtn("jev-remove", T("中斷連接"));
     o.note = j.source === "app" ? T("中斷連接會刪掉 Lumen 存的金鑰。") : T("中斷連接只是 Lumen 不再使用 Jev，你的金鑰檔案不受影響。");
   } else if (CN.jevEditing) {
@@ -2238,7 +2288,7 @@ function jevCard(j) {
   } else {
     st = "off";
     o.acts = cnBtn("jev-connect", T("連接 Jev"), true);
-    o.note = T("Jev 由 TypeSafe 提供，要用你自己的 TypeSafe 金鑰（一串像密碼的字，在 TypeSafe 網站申請）。費用很低。");
+    o.note = T("到 TypeSafe 網站申請金鑰（一串像密碼的字），貼進來就好，費用很低。");
   }
   if (CN.jevMsg) o.err = esc(CN.jevMsg);
   return card("Jev", st, o);

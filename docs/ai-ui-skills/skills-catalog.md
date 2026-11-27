@@ -20,7 +20,7 @@ Emil Kowalski 的 AI UI skills，依兩個網站整理，資料讀取日期 2026
 
 ## 總表
 
-安裝狀態（2026-11-27）：第一批 4 個已裝在使用者目錄 `~/.claude/skills/`，只給 Claude Code；本專案（`~/Lumen`）沒有裝任何 skill。
+安裝狀態（2026-11-27）：第一批 4 個和第二批 8 個（共 12 個）已裝在使用者目錄 `~/.claude/skills/`，只給 Claude Code；本專案（`~/Lumen`）沒有裝任何 skill。
 - 指令：`DISABLE_TELEMETRY=1 npx skills@latest add emilkowalski/skills --skill emil-design-eng --skill review-animations --skill animation-vocabulary --skill ask-emil -a claude-code -g -y`（CLI 1.9.0）
 - 版本：GitHub commit `64eb3deb9a5fbfa041faf783e0bc3fd635872e9c`（2026-11-15）。裝好的檔案和 repo 內容逐檔相同。
 - 寫入：`~/.claude/skills/<名稱>/`（直接複製，不是 symlink）；全域鎖定檔 `~/.agents/.skill-lock.json`（記錄來源、commit、資料夾雜湊）。另有 npx 的套件快取。

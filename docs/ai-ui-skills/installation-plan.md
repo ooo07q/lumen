@@ -1,6 +1,6 @@
 # 安裝計畫
 
-2026-11-27 已照第 1 節的指令裝好第一批（第 9 節）。實際寫入的位置見第 4 節的「實際結果」；第二批之後還沒裝。
+2026-11-27 已照第 1 節的指令裝好第一批（第 9 節）。實際寫入的位置見第 4 節的「實際結果」。同一天裝好第二批 8 個（animate、choreograph、apple-design、animation-performance、remove-animations、find-animation-opportunities、improve-animations、break-ui），指令同第 1 節，換成這 8 個 `--skill`。裝之前讀過每個 SKILL.md 和附檔：沒有 shell 指令，不寫專案以外的檔案，裝好的檔案和讀過的版本（commit 64eb3deb）逐檔相同。「視需要」和「不裝」兩組沒有裝。
 
 **已決定（2026-11-26）**：
 - 裝在使用者目錄 `~/.claude/skills/`（`-g`），不裝進 Lumen 專案。
@@ -136,4 +136,5 @@ DISABLE_TELEMETRY=1 npx skills@latest add emilkowalski/skills \
 - **learn-taste 讀對話紀錄**：可以讀 `~/.claude/projects/<project>/` 的 JSONL。這些紀錄有你的筆記內容。skill 在本機執行，讀紀錄不會把內容送出去，但它整理出的規則會寫進 `DESIGN.md`；放在公開 repo 時要先看過內容。
 - **遙測**：預設送出 skill 名稱與來源；已決定關掉（`DISABLE_TELEMETRY=1`）。
 - **不是為 Lumen 寫的**：很多做法假設 React、Motion、Tailwind。Lumen 是純 JS 和 CSS，請 skill 依 Lumen 的寫法實作，見 [prompt-library.md](prompt-library.md)。
-- **規則看不到**：review-animations 依「my rules」（STANDARDS.md）審查。這次沒讀到 STANDARDS.md，裝之前要讀。
+- **審查規則**：review-animations 依 STANDARDS.md 審查。2026-11-27 讀完全文（188 行），只有動畫數值與做法（easing 曲線、時長、`prefers-reduced-motion` 等），沒有要執行的指令，也不連網。內容以 React 與 Motion 為例，用在 Lumen 時要換成純 CSS 和 JS。
+- **參照其他 skill**：emil-design-eng、review-animations 和 STANDARDS.md 會指向 `../choreograph/SKILL.md`，ask-emil 會推薦第二批的 skill。第二批已裝，這些參照都讀得到；ask-emil 推薦的「視需要」和「不裝」兩組仍讀不到。

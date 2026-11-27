@@ -17,7 +17,7 @@
   --serif: "Iowan Old Style", "Songti TC", "Noto Serif TC", Georgia, serif;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #1b1a18;
     --panel: #232220;
     --line: #34322e;
@@ -33,6 +33,22 @@
     --mark: #5a4c16;
     --code: #2a2926;
   }
+}
+:root[data-theme="dark"] {
+    --bg: #1b1a18;
+    --panel: #232220;
+    --line: #34322e;
+    --text: #e6e2d9;
+    --muted: #9a958a;
+    --accent: #8cc2a9;
+    --accent-soft: #253830;
+    --warn: #e0a85a;
+    --warn-soft: #3a2e1d;
+    --pos: #a3b4e0;
+    --pos-soft: #262c3d;
+    --missing: #e09a72;
+    --mark: #5a4c16;
+    --code: #2a2926;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -543,3 +559,21 @@ details.what summary { cursor: pointer; color: var(--accent, inherit); list-styl
 details.what summary::-webkit-details-marker { display: none; }
 details.what summary::before { content: "? "; font-weight: 600; }
 details.what p { margin: 6px 0 0; line-height: 1.6; }
+
+/* display settings (顯示設定): text size, reading width, help lines, right-column sections */
+:root[data-size="s"] .note { font-size: 15px; }
+:root[data-size="l"] .note { font-size: 18px; }
+:root[data-width="s"] :is(.note-head, .note-tools, .note) { max-width: 660px; }
+:root[data-width="l"] :is(.note-head, .note-tools, .note) { max-width: 1040px; }
+.no-help .help { display: none !important; }
+.no-summaries .mention .s { display: none; }
+:root[data-hide~="suggest"] .psec[data-sec="suggest"], :root[data-hide~="organized"] .psec[data-sec="organized"],
+:root[data-hide~="atts"] .psec[data-sec="atts"], :root[data-hide~="links"] .psec[data-sec="links"],
+:root[data-hide~="linked"] .psec[data-sec="linked"], :root[data-hide~="backlinks"] .psec[data-sec="backlinks"] { display: none; }
+.vset h4 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 14px 0 6px; }
+.vset h4:first-child { margin-top: 0; }
+.vrow { display: flex; gap: 14px; }
+.vrow.wrap { flex-wrap: wrap; gap: 6px 14px; }
+.vopt { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
+.note-tools .more { font-size: 16px; line-height: 1; padding: 2px 10px; }
+.psec:not(:first-child) > h3:first-child { margin-top: 22px; }
