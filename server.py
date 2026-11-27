@@ -3420,7 +3420,10 @@ def api_chats(q):
             c = json.load(open(os.path.join(d, f), encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        out.append({"id": f[:-5], "title": c.get("title") or "", "updated": c.get("updated") or 0, "n": len(c.get("turns") or [])})
+        upd = c.get("updated") if isinstance(c, dict) else None
+        if not isinstance(upd, (int, float)):      # a file in another shape: leave it out, don't fail the whole list
+            continue
+        out.append({"id": f[:-5], "title": str(c.get("title") or ""), "updated": upd, "n": len(c.get("turns") or [])})
     out.sort(key=lambda c: -c["updated"])
     return 200, {"chats": out}
 

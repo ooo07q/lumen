@@ -789,5 +789,6 @@ const LUMEN_EN = {
 "（沒有標題）": "(untitled)",
 "存進知識庫": "Save to knowledge base",
 "\" title=\"把這個回答整理成知識庫裡的一頁，之後搜尋得到\">存進知識庫</button>": "\" title=\"Turn this answer into a page in your knowledge base, so search can find it later\">Save to knowledge base</button>",
-"存進知識庫：%s": "Save to knowledge base: %s"
+"存進知識庫：%s": "Save to knowledge base: %s",
+"顯示全部": "Show all"
 };

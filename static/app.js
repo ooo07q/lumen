@@ -141,11 +141,12 @@ function buildRawTree(files) {
 const TRASH_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
 // the human's files (movable, deletable): not wiki/ (the AI's), the tools, templates or hidden folders
 const mine = p => ROOT() ? p.startsWith(ROOT() + "/") : !/^(wiki|tools|templates)\//.test(p) && !/(^|\/)\./.test(p);
+const nf = n => Number(n).toLocaleString(document.documentElement.lang || undefined);   // 1,209
 function rowFile(path, label, extra = "", pre = "") {
   const t = tab();
   const on = t && (t.path === path);
   const own = mine(path) && !S.tree.read_only;
-  return '<div class="row' + (on ? " active" : "") + '" data-path="' + esc(path) + '"' + (own ? ' draggable="true"' : "") + '><span class="caret">' + pre + '</span><span class="name">' + esc(label) + "</span>" + extra +
+  return '<div class="row' + (on ? " active" : "") + '" data-path="' + esc(path) + '" title="' + esc(label) + '"' + (own ? ' draggable="true"' : "") + '><span class="caret">' + pre + '</span><span class="name">' + esc(label) + "</span>" + extra +
     (own ? '<button class="row-del" data-del="' + esc(path) + T('" title="刪除（移到垃圾桶，可復原）">') + TRASH_SVG + "</button>" : "") + "</div>";
 }
 // The one to-do marker, used everywhere a raw note is listed: orange = waiting to be organised,
@@ -170,8 +171,8 @@ function renderRawNode(node, prefix, filter) {
     const inner = filter ? renderRawNode(child, key, filter) : "";
     if (filter && !inner && !d.toLowerCase().includes(filter)) continue;
     const open = S.open.has(key) || (filter && inner);
-    html += '<div class="folder"><div class="row" data-folder="' + esc(key) + '"><span class="caret">' + (open ? "▾" : "▸") + '</span><span class="name">' + esc(d) +
-      '</span><span class="count" title="' + (child.todo ? child.todo + T(" 篇待整理，共 ") : T("共 ")) + child.total + T(' 篇">') + (child.todo ? '<span class="new"></span>' + child.todo + " / " : "") + child.total + "</span></div>" +
+    html += '<div class="folder"><div class="row" data-folder="' + esc(key) + '" title="' + esc(d) + '"><span class="caret">' + (open ? "▾" : "▸") + '</span><span class="name">' + esc(d) +
+      '</span><span class="count" title="' + (child.todo ? child.todo + T(" 篇待整理，共 ") : T("共 ")) + child.total + T(' 篇">') + (child.todo ? '<span class="new"></span>' + nf(child.todo) + " / " : "") + nf(child.total) + "</span></div>" +
       (open ? '<div class="kids">' + (inner || renderRawNode(child, key, "")) + "</div>" : "") + "</div>";
   }
   for (const f of node.files) {
@@ -193,7 +194,7 @@ function renderSub() {
   } else if (S.sideTab === "raw") {
     const todo = S.tree.raw.filter(f => !f.done && !inJournal(f.path) && !SKIP_DECISIONS.has(f.d)).length;
     el.innerHTML = '<div class="seg"><button data-mode="tree" class="' + (S.rawMode === "tree" ? "on" : "") + T('">資料夾</button>') +
-      '<button data-mode="todo" class="' + (S.rawMode === "todo" ? "on" : "") + T('"><span class="new"></span>待整理 <span>') + todo + "</span></button></div>";
+      '<button data-mode="todo" class="' + (S.rawMode === "todo" ? "on" : "") + T('"><span class="new"></span>待整理 <span>') + nf(todo) + "</span></button></div>";
   } else { el.hidden = true; return; }
   el.hidden = false;
 }
@@ -207,7 +208,7 @@ function renderTree() {
   else if (S.sideTab === "raw" && S.rawMode === "todo") renderQueue(el, filter);
   else if (S.sideTab === "raw") {
     const notes = S.tree.raw.filter(f => !inJournal(f.path));
-    el.innerHTML = '<div class="hint">' + notes.length + T(" 篇筆記，") + notes.filter(f => f.done).length + T(' 篇已整理進知識庫。<span class="new"></span> 待整理。</div>') + renderRawNode(S.rawRoot, ROOT(), filter);
+    el.innerHTML = '<div class="hint">' + nf(notes.length) + T(" 篇筆記，") + nf(notes.filter(f => f.done).length) + T(' 篇已整理進知識庫。<span class="new"></span> 待整理。</div>') + renderRawNode(S.rawRoot, ROOT(), filter);
   } else if (S.sideTab === "assets") renderAssets(el, filter);
   else if (S.sideTab === "wiki") {
     const types = S.kbType === "all" ? TYPE_ORDER : [S.kbType];
@@ -499,6 +500,7 @@ function showMenu(x, y, items, from) {             // from: the trigger point it
   m.onclick = e => { const b = e.target.closest("button"); if (b) { m.hidden = true; items[+b.dataset.i].fn(); } };
 }
 document.addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("#menu").hidden = true; });
+document.addEventListener("click", e => { const b = e.target.closest("[data-more]"); if (b) { b.nextElementSibling.hidden = false; b.remove(); } });
 document.addEventListener("scroll", () => ($("#menu").hidden = true), true);
 tree.addEventListener("contextmenu", e => {
   const f = e.target.closest(".row[data-folder]");
@@ -692,6 +694,8 @@ function openCompare(s) {
 
 const RENDER_MAX = 250000;
 
+// "+22": the rest of a long list (aliases, tags), shown in place on click
+const moreBtn = (rest, sep) => rest.length ? '<button class="link-btn more-items" data-more="1" title="' + T("顯示全部") + '">+' + rest.length + '</button><span class="more-rest" hidden>' + sep + rest.join(sep) + "</span>" : "";
 function headHtml(n, t) {
   const { fm } = splitFrontmatter(n.text);
   const title = n.page ? n.page.title : (fm.title || baseName(n.path));
@@ -700,7 +704,7 @@ function headHtml(n, t) {
   if (n.page) {
     chips.push(T('<span class="chip ai">AI 整理 · ') + esc(TYPE_ZH[n.page.type] || n.page.type) + "</span>");
     if (n.page.updated) chips.push(T("更新 ") + esc(n.page.updated));
-    if (n.page.aliases.length) chips.push(T("又名 ") + n.page.aliases.slice(0, 6).map(esc).join(T("、")));
+    if (n.page.aliases.length) chips.push(T("又名 ") + n.page.aliases.slice(0, 6).map(esc).join(T("、")) + moreBtn(n.page.aliases.slice(6).map(esc), T("、")));
   } else {
     chips.push(T('<span class="chip">你的筆記</span>'));
     if (fm.author) chips.push(esc(fm.author.replace(/[\[\]"]/g, "")));
@@ -714,10 +718,11 @@ function headHtml(n, t) {
   }
   const fmm = n.text.match(/^---\n([\s\S]*?)\n---/);         // tags, from the note's properties
   const tags = fmm ? (Props.parse(fmm[1]).find(p => /^tags?$/.test(p.key || "") && p.kind === "list") || { items: [] }).items : [];
-  if (tags.length) chips.push(tags.slice(0, 8).map(x => '<span class="tag">#' + esc(String(x).replace(/^#/, "")) + "</span>").join(" "));
+  const tagHtml = x => '<span class="tag">#' + esc(String(x).replace(/^#/, "")) + "</span>";
+  if (tags.length) chips.push(tags.slice(0, 8).map(tagHtml).join(" ") + moreBtn(tags.slice(8).map(tagHtml), " "));
   const folder = n.path.split("/").slice(0, -1).filter((x, i) => !(i === 0 && x === "raw"));   // the notes folder goes unsaid
   if (!n.private && folder.length) chips.push("<span>" + esc(folder.join(" / ")) + "</span>");
-  return (renamable ? T('<h1 class="renamable" data-act="rename" title="點一下改名">') : "<h1>") + esc(title) + '</h1><div class="meta">' + chips.join("<span>·</span>") + "</div>" +
+  return (renamable ? T('<h1 class="renamable" data-act="rename" title="點一下改名">') : "<h1>") + esc(title) + '</h1><div class="meta">' + chips.map(c => '<span class="mc">' + c + "</span>").join("") + "</div>" +
     (n.page && n.page.summary ? '<p class="summary">' + esc(n.page.summary) + "</p>" : "");
 }
 
@@ -1390,11 +1395,17 @@ async function poll() {
 
 const L = { left: store.get("w-left", 280), right: store.get("w-right", 340), leftOff: store.get("off-left", false), rightOff: store.get("off-right", false),
   cmp: store.get("w-cmp", 0.5) };
+// Under NARROW px the right column hides itself so the note keeps its room; opening it then lasts until the window widens.
+const NARROW = 1000;
+const isNarrow = () => innerWidth < NARROW;
+function rightHidden() { return L.rightOff || (isNarrow() && !L.peek); }
+let wasNarrow = isNarrow();
+addEventListener("resize", () => { const n = isNarrow(); if (n !== wasNarrow) { wasNarrow = n; L.peek = false; applyLayout(); } });
 function applyLayout() {
   const c = $("#cols");
   c.style.setProperty("--lw", (L.leftOff ? 0 : L.left) + "px");
-  c.style.setProperty("--rw", (L.rightOff ? 0 : L.right) + "px");
-  c.classList.toggle("left-off", L.leftOff); c.classList.toggle("right-off", L.rightOff);
+  c.style.setProperty("--rw", (rightHidden() ? 0 : L.right) + "px");
+  c.classList.toggle("left-off", L.leftOff); c.classList.toggle("right-off", rightHidden());
   document.documentElement.style.setProperty("--cmp-a", (L.cmp * 100).toFixed(1) + "%");
   if (typeof syncToggles === "function") syncToggles();
 }
@@ -1427,7 +1438,10 @@ $("#view").addEventListener("pointerdown", e => {
   dragGutter(g, e, ev => { L.cmp = Math.min(Math.max((ev.clientX - box.left) / box.width, 0.2), 0.8); applyLayout(); });
 });
 $("#view").addEventListener("dblclick", e => { if (e.target.closest(".cmp-g")) { L.cmp = 0.5; applyLayout(); saveLayout(); } });
-function toggleSide(side) { L[side + "Off"] = !L[side + "Off"]; applyLayout(); saveLayout(); }
+function toggleSide(side) {
+  if (side === "right" && isNarrow()) { if (L.rightOff) L.rightOff = false; L.peek = rightHidden(); applyLayout(); saveLayout(); return; }
+  L[side + "Off"] = !L[side + "Off"]; applyLayout(); saveLayout();
+}
 $("#toggle-left").onclick = () => toggleSide("left");
 $("#toggle-right").onclick = () => toggleSide("right");
 $("#view-btn").onclick = () => showViewSettings();
@@ -1435,8 +1449,8 @@ document.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && (e.key === "\\" || e.code === "Backslash")) { e.preventDefault(); toggleSide(e.shiftKey ? "right" : "left"); }
 });
 function syncToggles() {
-  $("#toggle-left").classList.toggle("on", !L.leftOff); $("#toggle-right").classList.toggle("on", !L.rightOff);
-  $("#toggle-left").setAttribute("aria-pressed", String(!L.leftOff)); $("#toggle-right").setAttribute("aria-pressed", String(!L.rightOff));
+  $("#toggle-left").classList.toggle("on", !L.leftOff); $("#toggle-right").classList.toggle("on", !rightHidden());
+  $("#toggle-left").setAttribute("aria-pressed", String(!L.leftOff)); $("#toggle-right").setAttribute("aria-pressed", String(!rightHidden()));
 };
 applyLayout();
 
@@ -1808,7 +1822,7 @@ function questionLike(raw) {
 }
 
 function showRight(name) {
-  if (L.rightOff) toggleSide("right");
+  if (rightHidden()) toggleSide("right");
   S.rtab = name;
   document.querySelectorAll(".rtabs button").forEach(b => b.classList.toggle("on", b.dataset.rtab === name));
   $("#panel").hidden = name !== "note"; $("#ai").hidden = name !== "ai";
