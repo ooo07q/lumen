@@ -722,3 +722,10 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 #tabbar { scrollbar-width: none; }
 #tabbar::-webkit-scrollbar { display: none; }
 .sliding .cols { overflow: hidden; }   /* the sliding column is clipped at the rail and the window edge */
+/* The left column's switch (資料夾 / 待整理, knowledge-base types aside) speaks the same pill language as the tabs */
+.seg { border: none; border-radius: 0; overflow: visible; gap: 4px; }
+.seg button { flex: none; height: 28px; padding: 0 11px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--muted); font-size: 13px; }
+.seg button + button { border-left: 1px solid transparent; }
+.seg button.on { background: var(--bg); border-color: var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.12); color: var(--text); font-weight: 600; }
+@media (hover: hover) and (pointer: fine) { .seg button:not(.on):hover { color: var(--text); } }
+.tabbar:not([hidden]) ~ .view .wys-bar { top: 45px; }   /* the editor toolbar sticks under the tab bar, not over it */
