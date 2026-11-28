@@ -721,3 +721,4 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 #tabbar .tab { flex-shrink: 1; min-width: 72px; }
 #tabbar { scrollbar-width: none; }
 #tabbar::-webkit-scrollbar { display: none; }
+.sliding .cols { overflow: hidden; }   /* the sliding column is clipped at the rail and the window edge */

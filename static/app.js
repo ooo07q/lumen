@@ -1573,7 +1573,12 @@ function toggleSide(side) {
   const slide = !matchMedia("(prefers-reduced-motion: reduce)").matches && innerWidth > 760;
   const cols = $("#cols"), off = () => (side === "left" ? L.leftOff : rightHidden()), closing = !off();
   const anchor = slide ? grabReadLine() : null, gen = slide ? ++slideGen : 0;   // no slide: applyLayout holds the line itself
-  if (slide) { cols.style.transition = "grid-template-columns 180ms cubic-bezier(0.23, 1, 0.32, 1)"; document.body.classList.add("sliding"); }   // the user chose this over instant (prototype, 2026-11-28)
+  const col = $(side === "left" ? ".left" : ".right");
+  if (slide) {
+    cols.style.transition = "grid-template-columns 180ms cubic-bezier(0.23, 1, 0.32, 1)"; document.body.classList.add("sliding");   // the user chose this over instant (prototype, 2026-11-28)
+    // like Notion: the column keeps its full width and slides behind the edge instead of being squeezed (left hugs its right edge)
+    col.style.width = L[side] + "px"; col.style.justifySelf = side === "left" ? "unsafe end" : "start";
+  }
   if (side === "right" && isNarrow()) { if (L.rightOff) L.rightOff = false; L.peek = rightHidden(); }
   else L[side + "Off"] = !L[side + "Off"];
   applyLayout(); saveLayout();
@@ -1583,6 +1588,7 @@ function toggleSide(side) {
   const finish = () => {
     if (gen !== slideGen) return;                          // a newer toggle took over (CSS retargets from where it is), or already done
     cols.style.transition = ""; document.body.classList.remove("sliding");
+    col.style.width = col.style.justifySelf = "";
     cols.classList.toggle(side + "-off", off());
     slideGen = 0; holdReadLine(anchor);
   };
