@@ -261,8 +261,25 @@ function renderTree() {
       html += rowsHtml(ps.map(p => rowFile(p.path, p.title)));
     }
     el.innerHTML = html || T('<div class="hint">沒有符合的頁面。</div>');
-  } else if (S.sideTab === "results") renderResults(el);
+  } else if (S.sideTab === "results") renderResults(el, filter);
   vObserve();
+}
+
+// Search results (Enter in the search box): knowledge-base pages (Jev ranks them by meaning, else keywords),
+// then your own notes and journal by keywords in their text (searched on this Mac only).
+function renderResults(el, filter) {
+  const r = S.results;
+  if (!r) { el.innerHTML = '<div class="hint">' + esc(T("在上方搜尋框輸入後按 ↵。")) + "</div>"; return; }
+  if (r.loading) { el.innerHTML = '<div class="hint"><span class="spin"></span> ' + esc(r.jev ? T("Jev 正在找相關的頁…") : T("搜尋中…")) + "</div>"; return; }
+  const pick = xs => (xs || []).filter(x => x.path && !x.missing && (!filter || x.title.toLowerCase().includes(filter)));
+  const pages = pick(r.results), notes = pick(r.notes);
+  let html = r.error ? '<div class="hint">' + esc(T("Jev 沒有回應，知識庫改用關鍵字。")) + "</div>" : "";
+  if (pages.length) html += '<div class="group sticky">' + esc(T("知識庫")) + " · " + nf(pages.length) + '<span class="r-how">' + esc(r.mode === "jev" ? T("依意思") : T("依關鍵字")) + "</span></div>" +
+    rowsHtml(pages.map(x => rowFile(x.path, x.title, '<span class="r-kind">' + esc(TYPE_ZH[x.type] || "") + "</span>")));
+  if (notes.length) html += '<div class="group sticky">' + esc(T("你的筆記")) + " · " + nf(notes.length) + '<span class="r-how">' + esc(T("內文含關鍵字")) + "</span></div>" +
+    rowsHtml(notes.map(x => rowFile(x.path, x.title, inJournal(x.path) ? '<span class="r-kind">' + esc(T("日記")) + "</span>" : "")));
+  if (!pages.length && !notes.length) html += '<div class="hint">' + esc(filter ? T("沒有符合篩選的結果。") : T("「{q}」沒有找到。換個說法，或按 ⌘↵ 問 AI。").replace("{q}", r.q)) + "</div>";
+  el.innerHTML = html;
 }
 
 // ---------- 日記
@@ -1506,11 +1523,15 @@ document.addEventListener("keydown", e => {
 async function ask(q) {
   if (!q) return;
   const jev = jevUsable();
-  S.results = { loading: true, jev };
-  S.sideTab = "results"; renderTree();
+  S.results = { loading: true, jev, q };
+  if (L.leftOff) toggleSide("left");                         // the results show in the left column
+  S.sideTab = "results"; $("#filter").value = ""; renderTree(); $("#tree").scrollTop = 0;
   const cached = jev ? JEV_CACHE.get(q) : null;
-  try { S.results = cached && !cached.error ? Object.assign({}, cached) : await api("/api/search?q=" + encodeURIComponent(q) + (jev ? "" : "&mode=bm25")); }
-  catch (e) { S.results = { mode: "bm25", results: [], error: e.message }; }
+  const url = "/api/search?notes=1&q=" + encodeURIComponent(q);
+  try {
+    if (cached && !cached.error) S.results = Object.assign({}, cached, { notes: (await api(url + "&mode=notes")).notes });   // pages already ranked while typing
+    else S.results = await api(url + (jev ? "" : "&mode=bm25"));
+  } catch (e) { S.results = { mode: "bm25", results: [], notes: [], error: e.message }; }
   S.results.q = q;
   if (S.sideTab === "results") renderTree();
 }

@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import importlib
 import json
+import math
 import os
 import re
 import secrets
@@ -285,6 +286,9 @@ def open_vault(path):
         V = Vault()
         V.fresh()
         threading.Thread(target=attachment_refs, daemon=True).start()   # warm the link cache (rename, 附件)
+        with NOTE_LOCK:
+            NOTE_INDEX.clear()                                      # the notes of the vault before
+        warm_notes()                                                # the search list's index of your notes
         _BG["last"] = 0.0
         threading.Timer(3, background_tidy, kwargs={"force": True}).start()   # new PDFs, notes to rank
         zh_keywords_nowait()                                              # and the Chinese keyword table (search)
@@ -793,11 +797,90 @@ def api_check(body):
     return 200, {"asked": len(top), "answered": len(answers), "failed": failed, "seconds": round(time.time() - t0, 1)}
 
 
+NOTE_INDEX = {}                     # rel -> (mtime, size, tokens): notes are tokenized once, again only when changed
+NOTE_LOCK = threading.Lock()        # one indexer at a time (the warm-up at start, or a search)
+
+
+def note_docs():
+    with NOTE_LOCK:
+        return note_docs_locked()
+
+
+def note_docs_locked():
+    seen, docs = set(), []
+    for rel in wiki.raw_files():
+        if not rel.endswith(".md"):
+            continue
+        path = os.path.join(VAULT, rel)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        seen.add(rel)
+        hit = NOTE_INDEX.get(rel)
+        if not hit or hit[0] != st.st_mtime or hit[1] != st.st_size:
+            try:
+                text = open(path, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            title = os.path.splitext(os.path.basename(rel))[0]
+            hit = NOTE_INDEX[rel] = (st.st_mtime, st.st_size, Counter(wiki.tokenize(title) * 3 + wiki.tokenize(text)))
+        docs.append((rel, hit[2]))
+    for rel in [r for r in NOTE_INDEX if r not in seen]:
+        del NOTE_INDEX[rel]
+    return docs
+
+
+def warm_notes():
+    """Tokenize every note in the background when a vault opens, so the first search doesn't wait for it."""
+    threading.Thread(target=note_docs, daemon=True).start()
+
+
+def note_search(question, n=20):
+    """Your own notes (journal included) whose text matches, BM25, best first. Runs on this Mac only: the
+    result goes to the search list, never to Jev or the AI (api_search's "results" stay knowledge-base pages)."""
+    q = set(wiki.tokenize(question))
+    if any(len(t) > 1 for t in q):                                       # 記憶 matches 記憶, not every note with 記
+        q = {t for t in q if len(t) > 1}
+    if not q:
+        return []
+    docs = note_docs()
+    if not docs:
+        return []
+    N = len(docs)
+    lens = {rel: sum(d.values()) for rel, d in docs}
+    avg = sum(lens.values()) / float(N)
+    df = Counter(t for _, d in docs for t in q if t in d)
+    out, need = [], max(1, math.ceil(len(q) * 0.6))                    # most of the query must be there
+    for rel, d in docs:
+        if sum(1 for t in q if t in d) < need:
+            continue
+        sc = sum(wiki.bm25(d[t], df[t], N, lens[rel], avg) for t in q if t in d)
+        if sc > 0:
+            out.append((sc, rel))
+    out.sort(key=lambda x: -x[0])
+    return [{"path": rel, "title": os.path.splitext(os.path.basename(rel))[0], "score": round(sc, 2)} for sc, rel in out[:n]]
+
+
 def api_search(q):
     question = q.get("q", [""])[0].strip()
     mode = q.get("mode", ["jev"])[0]
     if not question:
         return 200, {"results": []}
+    if mode == "notes":                                                  # notes only (the pages came from an earlier search)
+        q["notes"] = ["1"]
+        code, out = 200, {}
+    else:
+        code, out = api_search_pages(question, mode)
+    if q.get("notes", [""])[0] == "1":                                   # the search list asks; the AI's context never does
+        try:
+            out["notes"] = note_search(question)
+        except Exception as e:
+            out["notes"], out["notes_error"] = [], str(e)
+    return code, out
+
+
+def api_search_pages(question, mode):
     v = V.fresh()
     pages = [p for p in v.pages if p.name in v.sendable]
     t0 = time.time()

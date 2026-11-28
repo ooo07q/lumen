@@ -1,6 +1,16 @@
 // Japanese for Lumen's interface, keyed by the Traditional Chinese text like i18n-en.js. A string missing here shows in
 // English. Drafted by Claude (Sonnet) from the Chinese and English, checked for markup; native speakers welcome to fix.
 const LUMEN_JA = {
+  "Jev 沒有回應，知識庫改用關鍵字。": "Jev が応答しないため、知識ベースはキーワードで検索しました。",
+  "「{q}」沒有找到。換個說法，或按 ⌘↵ 問 AI。": "「{q}」は見つかりませんでした。言い方を変えるか、⌘↵ で AI に聞いてください。",
+  "你的筆記": "あなたのノート",
+  "依意思": "意味で",
+  "依關鍵字": "キーワードで",
+  "內文含關鍵字": "本文に語句あり",
+  "在上方搜尋框輸入後按 ↵。": "上の検索ボックスに入力して ↵ を押してください。",
+  "Jev 正在找相關的頁…": "Jev が関連ページを探しています…",
+  "搜尋中…": "検索中…",
+  "沒有符合篩選的結果。": "絞り込みに合う結果はありません。",
   "修改": "編集",
   "打開 PDF 的第 {n} 頁": "PDF の {n} ページを開く",
   "打開整本書的筆記": "本全体のノートを開く",

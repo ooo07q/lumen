@@ -1,6 +1,16 @@
 // English for Lumen's interface, keyed by the Traditional Chinese text. Built from the strings in app.js,
 // index.html and the server's messages.
 const LUMEN_EN = {
+  "Jev 沒有回應，知識庫改用關鍵字。": "Jev didn't answer, so wiki pages are matched by keywords.",
+  "「{q}」沒有找到。換個說法，或按 ⌘↵ 問 AI。": "Nothing found for “{q}”. Try other words, or press ⌘↵ to ask the AI.",
+  "你的筆記": "Your notes",
+  "依意思": "by meaning",
+  "依關鍵字": "by keywords",
+  "內文含關鍵字": "words in the text",
+  "在上方搜尋框輸入後按 ↵。": "Type in the search box above and press ↵.",
+  "Jev 正在找相關的頁…": "Jev is finding related pages…",
+  "搜尋中…": "Searching…",
+  "沒有符合篩選的結果。": "Nothing matches the filter.",
   "修改": "Edit",
   "打開 PDF 的第 {n} 頁": "Open the PDF at page {n}",
   "打開整本書的筆記": "Open the whole book's note",

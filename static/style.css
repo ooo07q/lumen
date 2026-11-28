@@ -747,3 +747,6 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 .prop-link { border: none; background: none; padding: 0; font: inherit; color: var(--accent); text-align: left; cursor: pointer; border-radius: 4px; }
 .prop-link:is(:active, .pressed):not(:disabled) { transform: none; background-image: var(--press-layer); }
 @media (hover: hover) and (pointer: fine) { .prop-link:hover { text-decoration: underline; text-underline-offset: 3px; } }
+/* search results: the page type sits at the row's end */
+.tree .row .r-kind { flex: none; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 11px; }
+.tree .group .r-how { float: right; font-weight: 400; color: var(--muted); }

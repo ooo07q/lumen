@@ -1,6 +1,16 @@
 // Korean for Lumen's interface, keyed by the Traditional Chinese text like i18n-en.js. A string missing here shows in
 // English. Drafted by Claude (Sonnet) from the Chinese and English, checked for markup; native speakers welcome to fix.
 const LUMEN_KO = {
+  "Jev 沒有回應，知識庫改用關鍵字。": "Jev가 응답하지 않아 지식 베이스는 키워드로 찾았어요.",
+  "「{q}」沒有找到。換個說法，或按 ⌘↵ 問 AI。": "“{q}”을(를) 찾지 못했어요. 다른 말로 찾거나 ⌘↵로 AI에게 물어보세요.",
+  "你的筆記": "내 노트",
+  "依意思": "의미로",
+  "依關鍵字": "키워드로",
+  "內文含關鍵字": "본문에 단어 포함",
+  "在上方搜尋框輸入後按 ↵。": "위 검색창에 입력하고 ↵를 누르세요.",
+  "Jev 正在找相關的頁…": "Jev가 관련 페이지를 찾고 있어요…",
+  "搜尋中…": "검색 중…",
+  "沒有符合篩選的結果。": "필터에 맞는 결과가 없어요.",
   "修改": "편집",
   "打開 PDF 的第 {n} 頁": "PDF {n}쪽 열기",
   "打開整本書的筆記": "책 전체 노트 열기",
