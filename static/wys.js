@@ -415,13 +415,6 @@ const Wys = (() => {
       const out = bs.map(b => same ? changeType(ed, b, "p")
         : changeType(ed, b, "li", { ind: b.dataset.ind || "", mk, ck: t === "check" ? (b.classList.contains("done") ? "x" : " ") : "" }));
       if (out[0]) place(out[out.length - 1], false);
-    } else if (t === "props") {                             // show the properties, or start them
-      const fm = propsBlock(ed);
-      if (ed._onProps) { ed._onProps(); return; }           // the app edits them in its side card
-      if (!fm._pp.open) fm.querySelector(".pp-toggle").click();
-      const nb = fm.querySelector(".pp-new"); if (nb && !fm._pp.props.some(p => p.key)) nb.click();
-      fm.scrollIntoView({ block: "nearest" });
-      return;
     } else if (t === "table") {
       const b = bs[bs.length - 1];
       const inTable = b && b.classList.contains("table");
@@ -596,8 +589,7 @@ const Wys = (() => {
   // ---------- toolbar
   const TOOLS = [["b", "<b>B</b>", "粗體 ⌘B"], ["i", "<i>I</i>", "斜體 ⌘I"], ["u", "<u>U</u>", "底線 ⌘U"], ["s", "<s>S</s>", "刪除線 ⇧⌘X"], null,
     ["ul", "•", "項目清單"], ["dash", "–", "虛線清單"], ["ol", "1.", "編號清單"], ["check", "◯", "核取清單 ⇧⌘L"], null,
-    ["table", "▦", "表格（在表格裡按：多一欄）"], ["attach", "📎", "圖片或附件"], null, ["outdent", "⇤", "減少縮排"], ["indent", "⇥", "增加縮排"], null,
-    ["props", "屬性", "筆記的屬性：標籤、別名、日期、來源…"]];
+    ["table", "▦", "表格（在表格裡按：多一欄）"], ["attach", "📎", "圖片或附件"], null, ["outdent", "⇤", "減少縮排"], ["indent", "⇥", "增加縮排"]];   // properties: edited in the app's side card
   function bar(ed, onAttach) {
     const el = document.createElement("div");
     el.className = "wys-bar";

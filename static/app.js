@@ -835,7 +835,6 @@ function renderView() {
   if (t.editing) {
     const ed = $("#editor");
     Wys.mount(ed, t.editText ?? n.text);
-    ed._onProps = () => propEdit(true);                     // the toolbar's 屬性 opens the side card's form
     Wys.attach(ed, () => noteChanged(t));
     ed._open = name => { const rel = resolveLink(name) || attachmentRel(name); if (rel) openNote(rel, { newTab: true }); };
     ed.before(Wys.bar(ed, pickAttachments));
@@ -1657,8 +1656,9 @@ function toggleSide(side) {
   const finish = () => {
     if (gen !== slideGen) return;                          // a newer toggle took over (CSS retargets from where it is), or already done
     cols.style.transition = ""; document.body.classList.remove("sliding");
-    col.style.width = col.style.justifySelf = "";
-    cols.classList.toggle(side + "-off", off());
+    // both columns: a slide of the other column that this one took over never ran its own finish
+    for (const c of document.querySelectorAll("#cols > .left, #cols > .right")) c.style.width = c.style.justifySelf = "";
+    cols.classList.toggle("left-off", L.leftOff); cols.classList.toggle("right-off", rightHidden());
     slideGen = 0; holdReadLine(anchor);
   };
   const step = () => {
