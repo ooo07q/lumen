@@ -123,7 +123,7 @@ const Props = (() => {
 
   // box: the editor's block; onChange(before) is called before each change (for undo) and after (dirty)
   function mount(box, yamlText, hooks) {
-    box._pp = { props: parse(yamlText), open: openPref(), raw: false };
+    box._pp = hooks.state || { props: parse(yamlText), open: openPref(), raw: false };   // state: another view of the same properties
     render(box);
     const st = box._pp;
     const touch = p => { hooks.before(); if (p) p.dirty = true; box._dirty = true; };

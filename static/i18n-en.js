@@ -1,6 +1,11 @@
 // English for Lumen's interface, keyed by the Traditional Chinese text. Built from the strings in app.js,
 // index.html and the server's messages.
 const LUMEN_EN = {
+  "修改": "Edit",
+  "打開 PDF 的第 {n} 頁": "Open the PDF at page {n}",
+  "打開整本書的筆記": "Open the whole book's note",
+  "打開知識庫裡的人物頁": "Open their page in the wiki",
+  "知識庫還沒有這個人的頁面": "No page for this person in the wiki yet",
   "鎖定這篇（唯讀）": "Lock this note (read-only)",
 "唯讀：筆記只能看，不能改": "Read-only: notes can be read, not changed",
 "唯讀": "Read-only",

@@ -783,11 +783,8 @@ function headHtml(n, t) {
     if (n.page.aliases.length) chips.push(T("又名 ") + n.page.aliases.slice(0, 6).map(esc).join(T("、")) + moreBtn(n.page.aliases.slice(6).map(esc), T("、")));
   } else {
     chips.push(T('<span class="chip">你的筆記</span>'));
-    if (fm.author) chips.push(esc(fm.author.replace(/[\[\]"]/g, "")));
     if (fm.source && /^https?:/.test(fm.source)) chips.push('<a href="' + esc(fm.source) + T('" target="_blank" rel="noopener">原文</a>'));
-    if (fm.pdf) {
-      const rel = attachmentRel(fm.pdf.replace(/^\[\[|\]\]$/g, ""));
-      if (rel) chips.push(attLink(rel, T("原始 PDF")));
+    if (fm.pdf && !(t && t.editing)) {                      // tidying changes how the text is shown: reading only
       chips.push(T('<button class="link-btn" data-act="pdf-layout" title="PDF 轉出來的筆記常有斷行、頁首頁尾和圖中文字。整理只影響顯示，檔案不變。">') + (S.pdfTidy ? T("顯示原始排版") : T("整理排版")) + "</button>");
     }
     if (n.private) chips.push(T('<span class="chip todo" title="日記只留在這台電腦：不送給 Jev，也不會整理進知識庫。">私人日記</span>'));
@@ -795,7 +792,7 @@ function headHtml(n, t) {
   const fmm = n.text.match(/^---\n([\s\S]*?)\n---/);         // tags, from the note's properties
   const tags = fmm ? (Props.parse(fmm[1]).find(p => /^tags?$/.test(p.key || "") && p.kind === "list") || { items: [] }).items : [];
   const tagHtml = x => '<span class="tag">#' + esc(String(x).replace(/^#/, "")) + "</span>";
-  if (tags.length) chips.push(tags.slice(0, 8).map(tagHtml).join(" ") + moreBtn(tags.slice(8).map(tagHtml), " "));
+  if (tags.length && n.page) chips.push(tags.slice(0, 8).map(tagHtml).join(" ") + moreBtn(tags.slice(8).map(tagHtml), " "));
   const folder = n.path.split("/").slice(0, -1).filter((x, i) => !(i === 0 && x === "raw"));   // the notes folder goes unsaid
   if (!n.private && folder.length) chips.push("<span>" + esc(folder.join(" / ")) + "</span>");
   return (renamable ? T('<h1 class="renamable" data-act="rename" title="點一下改名">') : "<h1>") + esc(title) + '</h1><div class="meta">' + chips.map(c => '<span class="mc">' + c + "</span>").join("") + "</div>" +
@@ -838,6 +835,7 @@ function renderView() {
   if (t.editing) {
     const ed = $("#editor");
     Wys.mount(ed, t.editText ?? n.text);
+    ed._onProps = () => propEdit(true);                     // the toolbar's 屬性 opens the side card's form
     Wys.attach(ed, () => noteChanged(t));
     ed._open = name => { const rel = resolveLink(name) || attachmentRel(name); if (rel) openNote(rel, { newTab: true }); };
     ed.before(Wys.bar(ed, pickAttachments));
@@ -846,6 +844,7 @@ function renderView() {
   v.dataset.shown = shown;
   if (isNew) v.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });   // a different note fades in; opacity only, so Reduce Motion keeps it; never blocks clicks or typing
   if (t.renameNow) { t.renameNow = false; startTitleRename(t); }
+  if (S.panelFor === t.path) propCard();                    // reading ↔ editing changes what the card offers
   updateAICtx();
 }
 
@@ -869,7 +868,7 @@ function renderFile(v, t) {
   const info = assetsData && assetsData.files.find(f => f.path === t.path);
   let body;
   if (kind === T("圖片")) body = '<img class="file-img" src="' + u + '" alt="">';
-  else if (kind === "PDF") body = '<iframe class="file-frame" src="' + u + '"></iframe>';
+  else if (kind === "PDF") body = '<iframe class="file-frame" src="' + u + (t.page ? "#page=" + t.page : "") + '"></iframe>';
   else if (kind === T("網頁")) {
     const made = info && info.note;
     body = '<div class="to-note">' + (made
@@ -968,6 +967,7 @@ async function saveTab(t, auto) {
       const d = new Date();
       t.msg = T(auto ? "已自動儲存 " : "已儲存 ") + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
       renderTabbar(); showSaveMsg(t);
+      if (tab() === t && !t.propEdit) propCard();          // not while its form is being typed in
       if (!t.editing) loadPanel(true);
     } catch (e) {
       t.msg = T("沒存成：") + e.message;
@@ -1272,7 +1272,76 @@ function renderPanel(p) {
   el.innerHTML = html;
   const c = $("#check-now");
   if (c) c.onclick = () => runCheck(p.path);
+  propCard();
 }
+
+// ---------- your note's properties as a card at the top of 這篇筆記 (prototype pick 側邊卡, 2026-11-28)
+// Names lead somewhere: the author to their page in the knowledge base, the book to its note, the pages into the PDF.
+// 修改 turns the card into the form; it edits the editor's own properties block (hidden in the note), so changes save
+// and undo like any other edit.
+const propLink = v => { const m = String(v || "").match(/^\[\[([^\]|#^]+)(?:\|([^\]]*))?\]\]$/); return m ? { path: m[1].trim(), name: (m[2] || m[1].split("/").pop()).trim() } : null; };
+function propRows(text) {
+  const m = text.match(/^---\n([\s\S]*?)\n---/);
+  if (!m) return "";
+  const P = {};
+  for (const p of Props.parse(m[1])) if (p.key) P[p.key] = p.kind === "list" ? p.items : p.kind === "text" ? p.value : null;
+  const list = k => [].concat(P[k] || []).map(x => String(x).replace(/^\[\[|\]\]$/g, "").trim()).filter(Boolean);
+  const few = (xs, html, sep) => xs.slice(0, 3).map(html).join(sep) + moreBtn(xs.slice(3).map(html), sep);   // a long list: three, then "+22"
+  const person = a => {
+    const pg = (S.tree.pages || []).find(x => x.type === "entity" && (x.title === a || (x.aliases || []).includes(a)));
+    return pg ? '<button class="prop-link" data-prop-open="' + esc(pg.path) + '" title="' + esc(T("打開知識庫裡的人物頁")) + '">' + esc(a) + "</button>"
+      : '<span title="' + esc(T("知識庫還沒有這個人的頁面")) + '">' + esc(a) + "</span>";
+  };
+  const book = propLink(P.book), pdfL = propLink(P.pdf) || (P.pdf ? { path: String(P.pdf) } : null);
+  const pdf = pdfL ? (pdfL.path.includes("/") ? pdfL.path : attachmentRel(pdfL.path)) : null;
+  const pages = P.pages ? String(P.pages) : "", first = parseInt(pages, 10) || 1;
+  const url = [].concat(P.source || [], P.url || []).find(v => /^https?:\/\//.test(v));
+  const row = (k, v) => v ? "<dt>" + esc(T(k)) + "</dt><dd>" + v + "</dd>" : "";
+  return row("作者", few(list("author"), person, T("、"))) +
+    row("書", book ? '<button class="prop-link" data-prop-open="' + esc(book.path.endsWith(".md") ? book.path : book.path + ".md") + '" title="' + esc(T("打開整本書的筆記")) + '">' + esc(book.name) + "</button>" : "") +
+    row("頁碼", pages ? (pdf ? '<button class="prop-link" data-prop-pdf="' + esc(pdf) + '" data-page="' + first + '" title="' + esc(T("打開 PDF 的第 {n} 頁").replace("{n}", first)) + '">p.' + esc(pages) + "</button>" : "p." + esc(pages)) : "") +
+    row("PDF", pdf && !pages ? '<button class="prop-link" data-prop-pdf="' + esc(pdf) + '" data-page="1">' + esc(baseName(pdf)) + "</button>" : "") +
+    row("發布日期", few(list("published"), esc, T("、"))) +
+    row("原文", url ? '<a class="prop-link" href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)) + "</a>" : "") +
+    row("別名", few(list("aliases"), esc, T("、"))) +
+    row("標籤", few(list(P.tags ? "tags" : "tag"), x => '<span class="tag">#' + esc(x.replace(/^#/, "")) + "</span>", " ")) +
+    row("說明", P.description ? esc(String(P.description)) : "");
+}
+function propCard() {
+  const el = $("#panel"), t = tab();
+  if (!el) return;
+  const old = el.querySelector(".prop-card"); if (old) old.remove();
+  if (!t || t.kind !== "note" || !t.note || t.note.page) return;
+  const canEdit = t.editing && $("#editor");
+  if (!canEdit) t.propEdit = false;
+  const rows = t.propEdit ? "" : propRows(liveText(t));
+  if (!rows && !canEdit) return;                            // reading a note without properties: no card
+  const btn = canEdit ? '<button type="button" class="prop-edit">' + esc(t.propEdit ? T("完成") : T("修改")) + "</button>" : "";
+  el.insertAdjacentHTML("afterbegin", '<div class="prop-card' + (t.propEdit ? " editing" : "") + '"><div class="prop-head"><h3>' + esc(T("屬性")) + "</h3>" + btn + "</div>" +
+    (t.propEdit ? '<div class="prop-form"></div>' : rows ? "<dl>" + rows + "</dl>" : '<p class="muted prop-none">' + esc(T("沒有屬性")) + "</p>") + "</div>");
+  if (t.propEdit) {                                         // the form: the editor's own properties block, seen from here
+    const ed = $("#editor"), fm = Wys.propsBlock(ed), box = el.querySelector(".prop-form");
+    fm._pp.open = true; fm._pp.raw = false;
+    Props.mount(box, "", { state: fm._pp, before: () => fm._ppBefore(), after: () => fm._ppAfter(), open: name => ed._open && ed._open(name) });
+    if (!fm._pp.props.some(p => p.key)) { const nb = box.querySelector(".pp-new"); if (nb) nb.click(); }   // none yet: start the first
+  }
+}
+function propEdit(on) {
+  const t = tab(); if (!t) return;
+  t.propEdit = on;
+  if (on && rightHidden()) showRight("note"); else if (on && S.rtab !== "note") showRight("note");
+  propCard();
+}
+async function openPdfAt(rel, page) {
+  await openNote(rel, { newTab: true });
+  const t = S.tabs.find(x => x.path === rel);
+  if (t && t.page !== page) { t.page = page; if (tab() === t) renderView(); }
+}
+document.addEventListener("click", e => {
+  const o = e.target.closest("[data-prop-open]"); if (o) { openNote(o.dataset.propOpen, { newTab: e.metaKey || e.ctrlKey }); return; }
+  const p = e.target.closest("[data-prop-pdf]"); if (p) { openPdfAt(p.dataset.propPdf, +p.dataset.page); return; }
+  if (e.target.closest(".prop-edit")) propEdit(!tab().propEdit);
+});
 
 function noteAttachments(text) {
   const out = new Set();

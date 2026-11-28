@@ -1,6 +1,11 @@
 // Korean for Lumen's interface, keyed by the Traditional Chinese text like i18n-en.js. A string missing here shows in
 // English. Drafted by Claude (Sonnet) from the Chinese and English, checked for markup; native speakers welcome to fix.
 const LUMEN_KO = {
+  "修改": "편집",
+  "打開 PDF 的第 {n} 頁": "PDF {n}쪽 열기",
+  "打開整本書的筆記": "책 전체 노트 열기",
+  "打開知識庫裡的人物頁": "지식 베이스의 인물 페이지 열기",
+  "知識庫還沒有這個人的頁面": "지식 베이스에 아직 이 사람의 페이지가 없어요",
   "鎖定這篇（唯讀）": "이 노트 잠그기 (읽기 전용)",
 "唯讀：筆記只能看，不能改": "읽기 전용: 노트를 볼 수만 있고 고칠 수 없습니다",
 "唯讀": "읽기 전용",

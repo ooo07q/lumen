@@ -729,3 +729,21 @@ details.what p { margin: 6px 0 0; line-height: 1.6; }
 .seg button.on { background: var(--bg); border-color: var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.12); color: var(--text); font-weight: 600; }
 @media (hover: hover) and (pointer: fine) { .seg button:not(.on):hover { color: var(--text); } }
 .tabbar:not([hidden]) ~ .view .wys-bar { top: 45px; }   /* the editor toolbar sticks under the tab bar, not over it */
+/* Your note's properties: a card at the top of 這篇筆記; the table in the note shows only when asked for */
+#editor .wb.fm { display: none; }   /* edited from the side card */
+.prop-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 2px 0 14px; background: var(--bg); font-size: 13px; }
+.prop-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.prop-head h3 { margin: 0 !important; }
+.prop-edit { border: none; background: none; padding: 2px 6px; margin-right: -6px; color: var(--muted); font-size: 12px; border-radius: 6px; }
+@media (hover: hover) and (pointer: fine) { .prop-edit:hover { color: var(--accent); background: var(--hover); } }
+.prop-card.editing .prop-edit { color: var(--accent); font-weight: 600; }
+.prop-none { margin: 0; font-size: 12px; }
+.prop-form .pp-head { display: none; }                        /* the card's own title says 屬性 */
+.prop-form .pp-row { grid-template-columns: 64px minmax(0, 1fr) 18px; gap: 6px; }
+.prop-form .pp-in { width: 100%; }
+.prop-card dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; }
+.prop-card dt { color: var(--muted); }
+.prop-card dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.prop-link { border: none; background: none; padding: 0; font: inherit; color: var(--accent); text-align: left; cursor: pointer; border-radius: 4px; }
+.prop-link:is(:active, .pressed):not(:disabled) { transform: none; background-image: var(--press-layer); }
+@media (hover: hover) and (pointer: fine) { .prop-link:hover { text-decoration: underline; text-underline-offset: 3px; } }

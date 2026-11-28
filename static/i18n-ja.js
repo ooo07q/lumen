@@ -1,6 +1,11 @@
 // Japanese for Lumen's interface, keyed by the Traditional Chinese text like i18n-en.js. A string missing here shows in
 // English. Drafted by Claude (Sonnet) from the Chinese and English, checked for markup; native speakers welcome to fix.
 const LUMEN_JA = {
+  "修改": "編集",
+  "打開 PDF 的第 {n} 頁": "PDF の {n} ページを開く",
+  "打開整本書的筆記": "本全体のノートを開く",
+  "打開知識庫裡的人物頁": "知識ベースの人物ページを開く",
+  "知識庫還沒有這個人的頁面": "知識ベースにはまだこの人のページがありません",
   "鎖定這篇（唯讀）": "このノートをロック（閲覧のみ）",
 "唯讀：筆記只能看，不能改": "読み取り専用：ノートは見るだけで、変更できません",
 "唯讀": "読み取り専用",

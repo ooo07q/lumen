@@ -101,9 +101,11 @@ const Wys = (() => {
       e.className = "wb fm";
       e.contentEditable = "false";
       const L = (b.md || "---\n---").split("\n");
+      e._ppBefore = () => { push(ed, true); e._dirty = true; };   // also used by the app's side card, which edits this same block
+      e._ppAfter = () => { delete e._md; changed(ed); };
       Props.mount(e, L.slice(1, -1).join("\n"), {
-        before: () => push(ed, true),
-        after: () => { delete e._md; changed(ed); },
+        before: () => e._ppBefore(),
+        after: () => e._ppAfter(),
         open: name => ed._open && ed._open(name),
       });
       if (b.isNew) e._new = true;
@@ -414,8 +416,8 @@ const Wys = (() => {
         : changeType(ed, b, "li", { ind: b.dataset.ind || "", mk, ck: t === "check" ? (b.classList.contains("done") ? "x" : " ") : "" }));
       if (out[0]) place(out[out.length - 1], false);
     } else if (t === "props") {                             // show the properties, or start them
-      let fm = ed.querySelector(":scope > .wb.fm");
-      if (!fm) { fm = el({ k: "fm", md: "---\n---", isNew: true }, ed); delete fm._md; ed.prepend(fm); }
+      const fm = propsBlock(ed);
+      if (ed._onProps) { ed._onProps(); return; }           // the app edits them in its side card
       if (!fm._pp.open) fm.querySelector(".pp-toggle").click();
       const nb = fm.querySelector(".pp-new"); if (nb && !fm._pp.props.some(p => p.key)) nb.click();
       fm.scrollIntoView({ block: "nearest" });
@@ -458,6 +460,11 @@ const Wys = (() => {
     return true;
   }
 
+  function propsBlock(ed) {                                 // the note's properties block, started empty if it has none
+    let fm = ed.querySelector(":scope > .wb.fm");
+    if (!fm) { fm = el({ k: "fm", md: "---\n---", isNew: true }, ed); delete fm._md; ed.prepend(fm); }
+    return fm;
+  }
   function changed(ed) {
     renumber(ed);
     ed._last = 0;                                           // the next typing is a step of its own
@@ -615,5 +622,5 @@ const Wys = (() => {
     return el;
   }
 
-  return { mount, attach, value, insertMd, bar, parse };
+  return { mount, attach, value, insertMd, bar, parse, propsBlock };
 })();
